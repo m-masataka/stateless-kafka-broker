@@ -1,0 +1,10 @@
+{
+  "cluster_id": "dev-cluster01",
+  "controller_id": 1,
+  "node_id": 1,
+  "host": "127.0.0.1",
+  "port": 9092,
+  "brokers": [
+    { "node_id": 1, "host": "127.0.0.1", "port": 9092 }
+  ]
+}
