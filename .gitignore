@@ -19,3 +19,4 @@ Cargo.lock
 data
 local
 tests
+config/cluster.json
