@@ -12,7 +12,6 @@ pub async fn handle_heartbeat_request<W>(
 where
     W: AsyncWrite + Unpin + Send,
 {
-    // TODO: Implement heartbeat logic
     let mut response = HeartbeatResponse::default();
     response.throttle_time_ms = 0;
     response.error_code = 0;

@@ -29,7 +29,7 @@ impl FileLogStore {
 }
 
 impl LogStore for FileLogStore {
-    fn write_batch(&self, topic: &str, partition: i32, records: Option<&Bytes>) -> anyhow::Result<i64> {
+    async fn write_batch(&self, topic: &str, partition: i32, records: Option<&Bytes>) -> anyhow::Result<i64> {
         if let Some(data) = records {
             let mut cursor = std::io::Cursor::new(data);
             let batch: RecordSet = RecordBatchDecoder::decode(&mut cursor)?;
@@ -74,7 +74,7 @@ impl LogStore for FileLogStore {
             writeln!(log_file, "{}", joined)?;
 
             FileExt::unlock(&log_file)?;
-            // オフセットを更新
+            // Updated offset file
             let current_offset = base_offset + batch.records.len() as i64;
             write_offset_to_file(&offset_file, current_offset)?;
             FileExt::unlock(&offset_file)?;
@@ -85,7 +85,7 @@ impl LogStore for FileLogStore {
         }
     }
 
-    fn read_records(&self, topic: &str, partition: i32, target_offset: i64, max_offset: i64) -> anyhow::Result<Bytes> {
+    async fn read_records(&self, topic: &str, partition: i32, target_offset: i64, max_offset: i64) -> anyhow::Result<Bytes> {
         let log_partition_dir = &self.log_store_dir.join(format!("{}/{}", topic, partition));
         if !log_partition_dir.exists() {
             create_dir_all(log_partition_dir)?;
@@ -120,7 +120,7 @@ impl LogStore for FileLogStore {
 
     }
 
-    fn read_offset(&self, topic: &str, partition: i32) -> anyhow::Result<i64> {
+    async fn read_offset(&self, topic: &str, partition: i32) -> anyhow::Result<i64> {
         let offset_file_path = self.log_store_dir.join(format!("{}/{}/offset.txt", topic, partition));
         let file = OpenOptions::new()
             .read(true)
@@ -132,7 +132,7 @@ impl LogStore for FileLogStore {
         }
     }
 
-    fn delete_topic_by_id(&self, topic_id: uuid::Uuid) -> anyhow::Result<()> {
+    async fn delete_topic_by_id(&self, topic_id: uuid::Uuid) -> anyhow::Result<()> {
         let topic_dir = self.log_store_dir.join(topic_id.to_string());
     
         if topic_dir.exists() {
@@ -150,7 +150,7 @@ impl LogStore for FileLogStore {
         }
     }
     
-    fn delete_topic_by_name(&self, topic_name: &str) -> anyhow::Result<()> {
+    async fn delete_topic_by_name(&self, topic_name: &str) -> anyhow::Result<()> {
         let topic_dir = self.log_store_dir.join(topic_name);
     
         if topic_dir.exists() {

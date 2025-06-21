@@ -7,8 +7,8 @@ use crate::common::{
     topic_partition::Topic,
     consumer::{ConsumerGroup, ConsumerGroupMember},
 };
+use anyhow::Result;
 use std::io::{ 
-    Result,
     BufReader,
     ErrorKind::NotFound,
     Read,
@@ -39,7 +39,7 @@ impl FileMetaStore {
 }
 
 impl MetaStore for FileMetaStore {
-    fn save_topic_partition_info(&self, data: &Topic) -> Result<()> {
+    async fn save_topic_partition_info(&self, data: &Topic) -> Result<()> {
         let mut metadata_map: HashMap<String, Topic> = match File::open(&self.meta_store_path) {
             Ok(mut file) => {
                 let mut contents = String::new();
@@ -54,7 +54,7 @@ impl MetaStore for FileMetaStore {
                 // If the file does not exist, create a new one
                 HashMap::new()
             },
-            Err(e) => return Err(e), // Other errors are returned as is
+            Err(e) => return Err(e.into()), // Other errors are returned as is
         };
     
         metadata_map.insert(data.topic_id.to_string(), data.clone());
@@ -66,11 +66,11 @@ impl MetaStore for FileMetaStore {
         Ok(())
     }
 
-    fn get_topic_info(&self, name: Option<&str>, topic_id: Option<&str>) -> Result<Option<Topic>> {
+    async fn get_topic_info(&self, name: Option<&str>, topic_id: Option<&str>) -> Result<Option<Topic>> {
         let file = match File::open(&self.meta_store_path) {
             Ok(f) => f,
             Err(e) if e.kind() == NotFound => return Ok(None),
-            Err(e) => return Err(e),
+            Err(e) => return Err(e.into()),
         };
         let reader = BufReader::new(file);
         let map: HashMap<String, Topic> = serde_json::from_reader(reader)?;
@@ -83,11 +83,11 @@ impl MetaStore for FileMetaStore {
         Ok(result.cloned())
     }
     
-    fn get_all_topics(&self) -> Result<Vec<Topic>> {
+    async fn get_all_topics(&self) -> Result<Vec<Topic>> {
         let file = match File::open(&self.meta_store_path) {
             Ok(f) => f,
             Err(e) if e.kind() == NotFound => return Ok(vec![]),
-            Err(e) => return Err(e),
+            Err(e) => return Err(e.into()),
         };
     
         let reader = BufReader::new(file);
@@ -96,7 +96,7 @@ impl MetaStore for FileMetaStore {
         Ok(map.values().cloned().collect())
     }
 
-    fn delete_topic_by_name(&self, name: &str) -> Result<()> {
+    async fn delete_topic_by_name(&self, name: &str) -> Result<()> {
         let mut metadata_map: HashMap<String, Topic> = match File::open(&self.meta_store_path) {
             Ok(mut file) => {
                 let mut contents = String::new();
@@ -110,7 +110,7 @@ impl MetaStore for FileMetaStore {
             Err(e) if e.kind() == NotFound => {
                 HashMap::new()
             },
-            Err(e) => return Err(e),
+            Err(e) => return Err(e.into()),
         };
     
         metadata_map.retain(|_, topic| topic.name.as_deref() != Some(name));
@@ -122,7 +122,7 @@ impl MetaStore for FileMetaStore {
         Ok(())
     }
 
-    fn delete_topic_by_id(&self, topic_id: uuid::Uuid) -> Result<()> {
+    async fn delete_topic_by_id(&self, topic_id: uuid::Uuid) -> Result<()> {
         let mut metadata_map: HashMap<String, Topic> = match File::open(&self.meta_store_path) {
             Ok(mut file) => {
                 let mut contents = String::new();
@@ -136,7 +136,7 @@ impl MetaStore for FileMetaStore {
             Err(e) if e.kind() == NotFound => {
                 HashMap::new()
             },
-            Err(e) => return Err(e),
+            Err(e) => return Err(e.into()),
         };
     
         metadata_map.retain(|_, topic| topic.topic_id != topic_id);
@@ -148,7 +148,7 @@ impl MetaStore for FileMetaStore {
         Ok(())
     }
 
-    fn save_consumer_group(&self, data: &ConsumerGroup) -> Result<()> {
+    async fn save_consumer_group(&self, data: &ConsumerGroup) -> Result<()> {
         let filename = format!("{0}.json", data.group_id);
         let path = &self.consumer_group_dir_path.join(filename);
     
@@ -170,13 +170,13 @@ impl MetaStore for FileMetaStore {
         Ok(())
     }
 
-    fn get_consumer_group(&self, group_id: &str) -> Result<Option<ConsumerGroup>> {
+    async fn get_consumer_group(&self, group_id: &str) -> Result<Option<ConsumerGroup>> {
         let filename = format!("{group_id}.json");
         let path = &self.consumer_group_dir_path.join(filename);
         let file = match File::open(path) {
             Ok(f) => f,
             Err(e) if e.kind() == NotFound => return Ok(None),
-            Err(e) => return Err(e),
+            Err(e) => return Err(e.into()),
         };
         let reader = BufReader::new(file);
         match serde_json::from_reader::<_, ConsumerGroup>(reader) {
@@ -196,7 +196,7 @@ impl MetaStore for FileMetaStore {
         }
     }
 
-    fn check_heartbeat(&self, group_id: &str) -> Result<Option<ConsumerGroup>> {
+    async fn update_heartbeat(&self, group_id: &str) -> Result<Option<ConsumerGroup>> {
         let filename = format!("{group_id}.json");
         let path = &self.consumer_group_dir_path.join(filename);
 
@@ -243,7 +243,7 @@ impl MetaStore for FileMetaStore {
         Ok(Some(checked_group.clone()))
     }
 
-    fn offset_commit(&self, group_id: &str, topic_name: &str, partition_index: i32, offset: i64) -> Result<()> {
+    async fn offset_commit(&self, group_id: &str, topic_name: &str, partition_index: i32, offset: i64) -> Result<()> {
         let filename = format!("{group_id}.json");
         let path = &self.consumer_group_dir_path.join(filename);
         let mut file = OpenOptions::new()
@@ -266,11 +266,11 @@ impl MetaStore for FileMetaStore {
 
         if consumer_group.group_id != group_id {
             log::error!("Consumer group ID mismatch: expected {}, found {}", group_id, consumer_group.group_id);
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Consumer group ID mismatch"));
+            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Consumer group ID mismatch").into());
         }
         if consumer_group.is_rebalancing {
             log::warn!("Consumer group {} is currently rebalancing, cannot commit offset", group_id);
-            return Err(std::io::Error::new(std::io::ErrorKind::Other, "Consumer group is rebalancing"));
+            return Err(std::io::Error::new(std::io::ErrorKind::Other, "Consumer group is rebalancing").into());
         }
 
         // update offset
@@ -329,7 +329,7 @@ impl MetaStore for FileMetaStore {
         Ok(())
     }
 
-    fn leave_group(&self, group_id: &str, member_id: &str) -> Result<()> {
+    async fn leave_group(&self, group_id: &str, member_id: &str) -> Result<()> {
         let filename = format!("{group_id}.json");
         let path = &self.consumer_group_dir_path.join(filename);
         let mut file = OpenOptions::new()
@@ -361,7 +361,7 @@ impl MetaStore for FileMetaStore {
         Ok(())
     }
 
-    fn update_heartbeat(&self, group_id: &str, member_id: &str) -> Result<Option<ConsumerGroup>> {
+    async fn update_heartbeat_by_member_id(&self, group_id: &str, member_id: &str) -> Result<Option<ConsumerGroup>> {
         let filename = format!("{group_id}.json");
         let path = &self.consumer_group_dir_path.join(filename);
         let mut file = OpenOptions::new()
@@ -398,7 +398,7 @@ impl MetaStore for FileMetaStore {
         Ok(Some(consumer_group))
     }
 
-    fn update_consumer_group_member(&self, group_id: &str, member: &ConsumerGroupMember) -> Result<()> {
+    async fn update_consumer_group_member(&self, group_id: &str, member: &ConsumerGroupMember) -> Result<()> {
         let filename = format!("{group_id}.json");
         let path = &self.consumer_group_dir_path.join(filename);
         let mut file = OpenOptions::new()
@@ -440,7 +440,7 @@ impl MetaStore for FileMetaStore {
         Ok(()) 
     }
 
-    fn gen_producer_id(&self) -> Result<i64> {
+    async fn gen_producer_id(&self) -> Result<i64> {
         let path = &self.producer_id_path;
         let mut file = OpenOptions::new()
             .read(true)

@@ -4,6 +4,11 @@
   "node_id": 1,
   "host": "127.0.0.1",
   "port": 9092,
+  "log_store": {
+    "type": "s3",
+    "bucket": "my-cluster-logs",
+    "prefix": "logs/"
+  },
   "brokers": [
     { "node_id": 1, "host": "127.0.0.1", "port": 9092 }
   ]

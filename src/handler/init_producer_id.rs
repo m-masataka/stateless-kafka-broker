@@ -11,6 +11,7 @@ use kafka_protocol::messages::ProducerId;
 use kafka_protocol::error::ResponseError::UnknownServerError;
 
 use crate::common::response::send_kafka_response;
+use crate::storage::meta_store_impl::MetaStoreImpl;
 use crate::traits::meta_store::MetaStore;
 
 
@@ -19,13 +20,13 @@ pub async fn handle_init_producer_id_request<W>(
     stream: &mut W,
     header: &RequestHeader,
     _request: &InitProducerIdRequest,
-    meta_store: &dyn MetaStore,
+    meta_store: &MetaStoreImpl,
 ) -> Result<()>
 where
     W: AsyncWrite + Unpin + Send,
 {
     log::info!("Handling InitProducerId {}", header.request_api_version);
-    let response = match meta_store.gen_producer_id() {
+    let response = match meta_store.gen_producer_id().await {
         Ok(producer_id) => {
             log::info!("Generated Producer ID: {}", producer_id);
             let mut res = InitProducerIdResponse::default();

@@ -34,6 +34,15 @@ By default, it listens on port 9092 and handles a subset of Kafka protocol reque
 
 ⚠️ Note: This broker is not suitable for production use. It is designed for learning, testing, and minimal simulation purposes.
 
+### S3 backend
+set key/secret
+
+```
+export AWS_ACCESS_KEY_ID=AKIAxxxxxxxxxxxxxxxx
+export AWS_SECRET_ACCESS_KEY=xxxxxxxxxxxxxxxxxxxxxxx
+export AWS_REGION=ap-northeast-1
+```
+
 ## 🧩 Architecture
 
 The core idea behind `stateless-kafka-broker` is to provide a lightweight, pluggable Kafka-compatible broker, where state persistence and log storage are **externalized and modularized**.

@@ -1,10 +1,12 @@
-use crate::traits::{
-    meta_store::MetaStore,
-    log_store::LogStore,
-};
+use crate::storage::s3::s3_client::S3Client;
+use crate::storage::s3::s3_log_store::S3LogStore;
+use crate::traits::meta_store::MetaStore;
 use crate::storage::{
-    file_meta_store::FileMetaStore,
-    file_log_store::FileLogStore,
+    file::file_meta_store::FileMetaStore,
+    file::file_log_store::FileLogStore,
+    log_store_impl::LogStoreImpl,
+    meta_store_impl::MetaStoreImpl,
+    s3::s3_meta_store::S3MetaStore,
 };
 
 use crate::handler::{
@@ -24,7 +26,7 @@ use crate::handler::{
     leave_group::handle_leave_group_request,
     consumer_group_heartbeat::handle_consumer_group_heartbeat_request,
 };
-use crate::common::config::{load_cluster_config, ClusterConfig};
+use crate::common::config::{load_cluster_config, ClusterConfig, StorageBackendConfig};
 use anyhow::Result;
 use std::{
     sync::Arc,
@@ -59,8 +61,33 @@ pub async fn server_start() -> anyhow::Result<()> {
     log::info!("Kafka-compatible server listening on port 9092");
 
     let cluster_conf_load = Arc::new(load_cluster_config("config/cluster.json")?);
-    let meta_store_load = Arc::new(FileMetaStore::new()) as Arc<dyn MetaStore>;
-    let log_store_load = Arc::new(FileLogStore::new()) as Arc<dyn LogStore>;
+    let meta_store_load =  match &cluster_conf_load.meta_store {
+        StorageBackendConfig::S3 { bucket, prefix } => {
+            log::info!("Using S3 meta store");
+            let s3_client = S3Client::new().await?;
+            Arc::new(MetaStoreImpl::S3(S3MetaStore::new(s3_client, bucket.clone(), prefix.clone())))
+        },
+        StorageBackendConfig::File => {
+            Arc::new(MetaStoreImpl::File(FileMetaStore::new()))
+        },
+        _ => {
+            return Err(anyhow::anyhow!("Unsupported meta store backend"));
+        }
+    };
+
+    let log_store_load = match &cluster_conf_load.log_store {
+        StorageBackendConfig::S3 { bucket, prefix } => {
+            log::info!("Using S3 log store");
+            let s3_client = S3Client::new().await?;
+            Arc::new(LogStoreImpl::S3(S3LogStore::new(s3_client, bucket.clone(), prefix.clone())))
+        },
+        StorageBackendConfig::File => {
+            Arc::new(LogStoreImpl::File(FileLogStore::new()))
+        },
+        _ => {
+            return Err(anyhow::anyhow!("Unsupported log store backend"));
+        }
+    };
     loop {
         let (stream, addr) = listener.accept().await?;
         log::info!("Accepted connection from {:?}", addr);
@@ -79,8 +106,8 @@ pub async fn server_start() -> anyhow::Result<()> {
 
 async fn handle_connection(mut stream: tokio::net::TcpStream, 
     cluster_config: Arc<ClusterConfig>,
-    meta_store: Arc<dyn MetaStore>,
-    log_store: Arc<dyn LogStore>,
+    meta_store: Arc<MetaStoreImpl>,
+    log_store: Arc<LogStoreImpl>,
 ) -> Result<()> {
     loop {
         // Read length prefix

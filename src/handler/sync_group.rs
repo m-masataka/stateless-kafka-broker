@@ -12,6 +12,7 @@ use kafka_protocol::error::ResponseError;
 
 use crate::common::consumer::ConsumerGroupMember;
 use crate::common::response::send_kafka_response;
+use crate::storage::meta_store_impl::MetaStoreImpl;
 use crate::traits::meta_store::MetaStore;
 use bytes::Bytes;
 
@@ -20,7 +21,7 @@ pub async fn handle_sync_group_request<W>(
     stream: &mut W,
     header: &RequestHeader,
     request: &SyncGroupRequest,
-    meta_store: &dyn MetaStore,
+    meta_store: &MetaStoreImpl,
 ) -> Result<()> 
 where
     W: AsyncWrite + Unpin + Send,
@@ -30,7 +31,7 @@ where
 
     // グループIDとメンバーIDを取得
     let group_id = request.group_id.clone();
-    let consumer_group = meta_store.get_consumer_group(group_id.as_str())?;
+    let consumer_group = meta_store.get_consumer_group(group_id.as_str()).await?;
 
     // TODO: Heartbeatの処理を追加する
     let response = if let Some(consumer_group) = consumer_group {
@@ -56,7 +57,7 @@ where
             }
         };
 
-        match meta_store.update_consumer_group_member(&group_id.clone(), &member) {
+        match meta_store.update_consumer_group_member(&group_id.clone(), &member).await {
             Ok(_) => {
                 log::info!("Successfully updated consumer group member: {}", request.member_id);
             },

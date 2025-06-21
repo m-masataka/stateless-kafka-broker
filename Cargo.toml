@@ -1,7 +1,7 @@
 [package]
 name = "serverless_kafka_broker"
 version = "0.1.0"
-edition = "2025"
+edition = "2024"
 
 
 [dependencies]
@@ -23,6 +23,11 @@ fs2 = "0.4"
 indexmap = "2.9.0"
 tokio = { version = "1", features = ["full"] }
 chrono = { version = "0.4", features = ["clock"] }
+
+aws-config = "1"
+aws-sdk-s3 = "1.93.0"
+
+redis = { version = "0.32.1", features = ["tokio-comp"] }
 
 [dev-dependencies]
 rdkafka = { version = "0.37.0", features = ["tokio"] }

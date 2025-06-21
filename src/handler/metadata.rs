@@ -12,6 +12,7 @@ use kafka_protocol::messages::TopicName;
 use kafka_protocol::messages::BrokerId;
 use kafka_protocol::error::ResponseError::UnknownTopicOrPartition;
 
+use crate::storage::meta_store_impl::MetaStoreImpl;
 use crate::{common::{config::ClusterConfig, response::send_kafka_response, topic_partition::Topic}};
 use crate::traits::meta_store::MetaStore;
 
@@ -20,7 +21,7 @@ pub async fn handle_metadata_request<W>(
     header: &RequestHeader,
     request: &MetadataRequest,
     cluster_config: &ClusterConfig,
-    meta_store: &dyn MetaStore,
+    meta_store: &MetaStoreImpl,
 ) -> Result<()>
 where
     W: AsyncWrite + Unpin + Send,
@@ -51,14 +52,16 @@ where
     response.topics = match &request.topics {
         None => {
             // すべてのトピックのメタデータを返す（meta_store.list_topics() など使う）
-            meta_store.get_all_topics().unwrap_or_default()
+            meta_store.get_all_topics().await
+                .unwrap_or_default()
                 .into_iter()
                 .map(|topic| to_metadata_response_topic(&topic, leader_id))
                 .collect::<Vec<_>>()
         },
         Some(topics) if topics.is_empty() => {
             // Kafka の実装的には "all topics" 扱いされることもあるので同様に全件返してもOK
-            meta_store.get_all_topics().unwrap_or_default()
+            meta_store.get_all_topics().await
+                .unwrap_or_default()
                 .into_iter()
                 .map(|topic| to_metadata_response_topic(&topic, leader_id))
                 .collect::<Vec<_>>()
@@ -66,10 +69,10 @@ where
         Some(topics) => {
             // 指定されたトピックのみ返す
             let mut response_topics = Vec::new();
-            topics.iter().for_each(|request_topic| {
+            for request_topic in topics.iter() {
                 if let Some(name) = &request_topic.name {
                     log::debug!("Requesting metadata for topic: {}", name.as_str());
-                    match meta_store.get_topic_info(Some(name), None) {
+                    match meta_store.get_topic_info(Some(name), None).await {
                         Ok(Some(topic_info)) => {
                             response_topics.push(to_metadata_response_topic(&topic_info, leader_id));
                         }
@@ -91,7 +94,7 @@ where
                 } else {
                     log::debug!("If request_topic.name is None, it should not happen in practice.");
                 }
-            });
+            }
             response_topics
         }
     };

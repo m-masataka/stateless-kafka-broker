@@ -52,9 +52,10 @@ pub fn is_flexible_version(api_key: i16, version: i16) -> bool {
         9 => version >= 8,   // OffsetFetch
         10 => version >= 3,  // FindCoordinator
         11 => version >= 7,  // JoinGroup
+        12 => version >= 4,  // Heartbeat
+        13 => version >= 3,  // LeaveGroup
         14 => version >= 4,  // SyncGroup
-        15 => version >= 3,  // Heartbeat
-        16 => version >= 3,  // LeaveGroup
+        15 => version >= 3,  // DescribeGroups
         18 => version >= 3,  // ApiVersions
         19 => version >= 5,  // CreateTopics
         20 => version >= 3,  // DeleteTopics

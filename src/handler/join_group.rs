@@ -12,6 +12,7 @@ use kafka_protocol::messages::join_group_response::{
 
 use crate::common::consumer::{ConsumerGroup, ConsumerGroupMember};
 use crate::common::response::{send_kafka_response, send_kafka_response_insert_prefix};
+use crate::storage::meta_store_impl::MetaStoreImpl;
 use crate::traits::meta_store::MetaStore;
 use uuid::Uuid;
 use std::collections::BTreeMap;
@@ -21,7 +22,7 @@ pub async fn handle_join_group_request<W>(
     stream: &mut W,
     header: &RequestHeader,
     request: &JoinGroupRequest,
-    meta_store: &dyn MetaStore,
+    meta_store: &MetaStoreImpl,
 ) -> Result<()>
 where
     W: AsyncWrite + Unpin + Send,
@@ -32,7 +33,7 @@ where
     // グループIDとメンバーIDを取得
     let group_id = request.group_id.clone();
     // Heartbeatの更新とgroupの取得
-    let mut consumer_group = meta_store.check_heartbeat(group_id.as_str())?;
+    let mut consumer_group = meta_store.update_heartbeat(group_id.as_str()).await?;
     log::debug!("Consumer group after heartbeat check: {:?}", consumer_group);
 
     let response = if let Some(store_group) = consumer_group.as_mut() {
@@ -49,7 +50,7 @@ where
             let requester_id = member_id_str.clone();
             let leader_id = member_id_str.clone();
             let cg = new_consumer_group(request, member_id_str, leader_id, &group_id, generation_id);
-            meta_store.save_consumer_group(&cg)?;
+            meta_store.save_consumer_group(&cg).await?;
         
             convert_consumer_group_to_join_response(
                 &cg,
@@ -77,7 +78,7 @@ where
         let requester_id = member_id_str.clone();
         let leader_id = member_id_str.clone();
         let cg = new_consumer_group(request, member_id_str, leader_id, &group_id, 1);
-        meta_store.save_consumer_group(&cg)?;
+        meta_store.save_consumer_group(&cg).await?;
         
         convert_consumer_group_to_join_response(
             &cg,
