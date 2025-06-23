@@ -5,7 +5,8 @@ use crate::common::{
 };
 use anyhow::Result;
 
-pub trait MetaStore: Send + Sync {
+#[trait_variant::make(MetaStore: Send)]
+pub trait UnsendMetaStore {
     async fn save_topic_partition_info(&self, data: &Topic) -> Result<()>;
     async fn get_topic_info(&self, name: Option<&str>, topic_id: Option<&str>) -> Result<Option<Topic>>;
     async fn delete_topic_by_name(&self, name: &str) -> Result<()>;

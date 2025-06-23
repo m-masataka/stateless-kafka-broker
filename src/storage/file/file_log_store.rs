@@ -1,4 +1,4 @@
-use crate::{common::record::convert_kafka_record_to_record_entry, traits::log_store::LogStore};
+use crate::{common::record::convert_kafka_record_to_record_entry, traits::log_store::UnsendLogStore};
 use std::{
     fs::{create_dir_all, File, OpenOptions},
     io::{self, BufRead, BufReader, Error, ErrorKind::InvalidData, Result, Seek, SeekFrom, Write},
@@ -12,7 +12,6 @@ use kafka_protocol::records::{
 };
 use fs2::FileExt;
 use chrono::Local;
-use std::fs;
 use crate::common::record::RecordEntry;
 use crate::common::record::Offset;
 
@@ -30,7 +29,7 @@ impl FileLogStore {
     }
 }
 
-impl LogStore for FileLogStore {
+impl UnsendLogStore for FileLogStore {
     async fn write_batch(&self, topic_id: &str, partition: i32, records: Option<&Bytes>) -> anyhow::Result<i64> {
         if let Some(data) = records {
             let mut cursor = std::io::Cursor::new(data);
@@ -197,8 +196,4 @@ fn read_record_from_file(file: &File, target_offset: i64, max_offset: i64) -> Re
         }
     }
     Ok(result)
-}
-
-fn timestamp_prefix() -> String {
-    Local::now().format("%Y%m%d_%H%M%S%3f").to_string()
 }

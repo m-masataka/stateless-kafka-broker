@@ -1,6 +1,6 @@
 
 use crate::storage::s3::s3_client::S3Client;
-use crate::traits::meta_store::MetaStore;
+use crate::traits::meta_store::UnsendMetaStore;
 use crate::common::topic_partition::Topic;
 use crate::common::consumer::{ConsumerGroup, ConsumerGroupMember};
 
@@ -25,7 +25,7 @@ impl S3MetaStore {
     }
 }
 
-impl MetaStore for S3MetaStore {
+impl UnsendMetaStore for S3MetaStore {
     async fn save_topic_partition_info(&self, data: &crate::common::topic_partition::Topic) -> Result<()> {
         Ok(())
     }

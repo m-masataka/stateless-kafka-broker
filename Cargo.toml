@@ -27,7 +27,9 @@ chrono = { version = "0.4", features = ["clock"] }
 aws-config = "1"
 aws-sdk-s3 = "1.93.0"
 
-redis = { version = "0.32.1", features = ["tokio-comp"] }
+redis = { version = "0.32.2", features = ["tokio-comp"] }
+trait-variant = "0.1"
+async-trait = "0.1"
 
 [dev-dependencies]
 rdkafka = { version = "0.37.0", features = ["tokio"] }

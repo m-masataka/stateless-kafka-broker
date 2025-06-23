@@ -1,3 +1,4 @@
+#![allow(clippy::async_fn_in_trait)]
 pub mod handler;
 pub mod server;
 pub mod common;

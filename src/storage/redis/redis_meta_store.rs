@@ -1,5 +1,5 @@
 use crate::storage::redis::redis_client::RedisClient;
-use crate::traits::meta_store::MetaStore;
+use crate::traits::meta_store::UnsendMetaStore;
 use crate::common::topic_partition::Topic;
 use crate::common::consumer::{ConsumerGroup, ConsumerGroupMember};
 use anyhow::Result;
@@ -16,7 +16,7 @@ impl RedisMetaStore {
     }
 }
 
-impl MetaStore for RedisMetaStore {
+impl UnsendMetaStore for RedisMetaStore {
     async fn save_topic_partition_info(&self, data: &Topic) -> Result<()> {
         // set the topic information in Redis
         // using the topic name as the key and the serialized data as the value

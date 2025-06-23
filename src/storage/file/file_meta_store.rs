@@ -2,7 +2,7 @@ use crate::common::consumer::{
     Partition,
     Topics,
 };
-use crate::traits::meta_store::MetaStore;
+use crate::traits::meta_store::UnsendMetaStore;
 use crate::common::{
     topic_partition::Topic,
     consumer::{ConsumerGroup, ConsumerGroupMember},
@@ -38,7 +38,7 @@ impl FileMetaStore {
     }
 }
 
-impl MetaStore for FileMetaStore {
+impl UnsendMetaStore for FileMetaStore {
     async fn save_topic_partition_info(&self, data: &Topic) -> Result<()> {
         let mut metadata_map: HashMap<String, Topic> = match File::open(&self.meta_store_path) {
             Ok(mut file) => {

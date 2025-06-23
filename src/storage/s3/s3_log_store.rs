@@ -1,4 +1,4 @@
-use crate::{common::record::{convert_kafka_record_to_record_entry, RecordEntry}, traits::log_store::LogStore};
+use crate::{common::record::{convert_kafka_record_to_record_entry, RecordEntry}, traits::log_store::UnsendLogStore};
 use std::{
     io::{self, BufReader, Result},
 };
@@ -31,7 +31,7 @@ impl S3LogStore {
     }
 }
 
-impl LogStore for S3LogStore {
+impl UnsendLogStore for S3LogStore {
     async fn write_batch(&self, topic_id: &str, partition: i32, records: Option<&Bytes>) -> anyhow::Result<i64> {
         if let Some(data) = records {
             let offset_key = self.offset_key(topic_id, partition);

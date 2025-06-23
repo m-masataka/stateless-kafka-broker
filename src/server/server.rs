@@ -78,9 +78,6 @@ pub async fn server_start() -> anyhow::Result<()> {
             let redis_client = RedisClient::new(client).await?;
             Arc::new(MetaStoreImpl::Redis(RedisMetaStore::new(redis_client)))
         }
-        _ => {
-            return Err(anyhow::anyhow!("Unsupported meta store backend"));
-        }
     };
 
     let log_store_load = match &cluster_conf_load.log_store {
@@ -90,12 +87,14 @@ pub async fn server_start() -> anyhow::Result<()> {
             Arc::new(LogStoreImpl::S3(S3LogStore::new(s3_client, bucket.clone(), prefix.clone())))
         },
         StorageBackendConfig::File => {
+            log::info!("Using File log store");
             Arc::new(LogStoreImpl::File(FileLogStore::new()))
         },
         _ => {
             return Err(anyhow::anyhow!("Unsupported log store backend"));
         }
     };
+    
     loop {
         let (stream, addr) = listener.accept().await?;
         log::info!("Accepted connection from {:?}", addr);

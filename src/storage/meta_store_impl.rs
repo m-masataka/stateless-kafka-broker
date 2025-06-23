@@ -1,6 +1,6 @@
 use crate::common::consumer::ConsumerGroupMember;
 use crate::storage::redis::redis_meta_store::RedisMetaStore;
-use crate::traits::meta_store::MetaStore;
+use crate::traits::meta_store::{UnsendMetaStore, MetaStore};
 use crate::storage::file::file_meta_store::FileMetaStore;
 use crate::storage::s3::s3_meta_store::S3MetaStore;
 use crate::common::{

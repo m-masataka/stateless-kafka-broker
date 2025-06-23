@@ -1,7 +1,7 @@
 use crate::traits::log_store::LogStore;
 use crate::storage::file::file_log_store::FileLogStore;
 use crate::storage::s3::s3_log_store::S3LogStore;
-
+use crate::traits::log_store::UnsendLogStore;
 use bytes::Bytes;
 
 pub enum LogStoreImpl {
