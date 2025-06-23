@@ -34,15 +34,15 @@ where
     let mut topic_responses = Vec::new();
     for topic in &request.topics {
         let mut topic_response = FetchableTopicResponse::default();
-        let topic_name = topic.topic.clone();
-        topic_response.topic = topic_name.clone();
+        let topic_id = topic.topic_id.clone();
+        topic_response.topic = topic.topic.clone();
         let mut partition_responses = Vec::new();
         for partition in &topic.partitions {
             log::debug!("FetchRequest partition: {:?}", partition);
             let mut partition_response = PartitionData::default();
-            match log_store.read_offset(&topic_name, partition.partition).await {
+            match log_store.read_offset(&topic_id.to_string(), partition.partition).await {
                 Ok(current_offset) => {
-                    match log_store.read_records(&topic_name, partition.partition, partition.fetch_offset, current_offset).await {
+                    match log_store.read_records(&topic_id.to_string(), partition.partition, partition.fetch_offset, current_offset).await {
                         Ok(records) => {
                             partition_response.error_code = 0;
                             partition_response.records = Some(records);
@@ -52,7 +52,7 @@ where
                             partition_response.partition_index = partition.partition;
                         }
                         Err(e) => {
-                            log::debug!("Failed to read records for topic {:?} partition {}: {:?}", topic_name, partition.partition, e);
+                            log::debug!("Failed to read records for topic {:?} partition {}: {:?}", topic_id, partition.partition, e);
                             // if no data found, set error code to 0 and return empty records
                             partition_response.error_code = 0;
                             partition_response.partition_index = partition.partition;
@@ -65,7 +65,7 @@ where
                     }
                 }
                 Err(e) => {
-                    log::debug!("Failed to read offset for topic {:?} partition {}: {:?}", topic_name, partition.partition, e);
+                    log::debug!("Failed to read offset for topic {:?} partition {}: {:?}", topic_id, partition.partition, e);
                         // if no data found, set error code to 0 and return empty records
                         partition_response.error_code = 0;
                         partition_response.partition_index = partition.partition;

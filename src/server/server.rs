@@ -240,7 +240,7 @@ async fn handle_connection(mut stream: tokio::net::TcpStream,
                 if let RequestKind::Produce(ref req) =
                     RequestKind::Produce(ProduceRequest::decode(&mut buf, header.request_api_version).unwrap())
                 {
-                    handle_produce_request(&mut stream, &header, req, &cluster_config, &*log_store).await?;
+                    handle_produce_request(&mut stream, &header, req, &cluster_config, &*meta_store, &*log_store).await?;
                 }
             }
             ApiKey::CreateTopics => {

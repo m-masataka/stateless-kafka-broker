@@ -18,7 +18,11 @@ use kafka_protocol::
     protocol::StrBytes, 
 };
 
-use crate::{common::response::send_kafka_response, storage::log_store_impl::LogStoreImpl, traits::log_store::LogStore};
+use crate::{
+    common::response::send_kafka_response,
+    storage::{log_store_impl::LogStoreImpl, meta_store_impl::MetaStoreImpl},
+    traits::{log_store::LogStore, meta_store::MetaStore}
+};
 use crate::common::config::ClusterConfig;
 
 
@@ -28,6 +32,7 @@ pub async fn handle_produce_request<W>(
     header: &RequestHeader,
     request: &ProduceRequest,
     cluster_config: &ClusterConfig,
+    meta_store: &MetaStoreImpl,
     log_store: &LogStoreImpl,
 ) -> Result<()> 
 where
@@ -44,19 +49,33 @@ where
         let mut topic_produce_response = TopicProduceResponse::default();
         topic_produce_response.name = topic_data.name.clone();
 
+
         let mut partition_responses = Vec::new();
 
         for request_partition_data in &topic_data.partition_data {
             let mut partition_produce_response = PartitionProduceResponse::default();
             partition_produce_response.index = request_partition_data.index;
 
+            let topic_info = meta_store.get_topic_info(Some(topic_data.name.clone().as_str()), None).await
+                .map_err(|e| {
+                    log::error!("Failed to get topic info: {:?}", e);
+                    ResponseError::UnknownTopicOrPartition
+                })?;
+
+            let topic_id = topic_info
+                .as_ref()
+                .ok_or_else(|| {
+                    log::error!("Topic info is None");
+                    ResponseError::UnknownTopicOrPartition
+                })?
+                .topic_id;
+
             match log_store
                 .write_batch(
-                    &topic_data.name,
+                    &topic_id.to_string(),
                     request_partition_data.index,
                     request_partition_data.records.as_ref(),
-                )
-                .await
+                ).await
             {
                 Ok(base_offset) => {
                     partition_produce_response.error_code = 0;
