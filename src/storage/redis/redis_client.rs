@@ -8,8 +8,7 @@ pub struct RedisClient {
 }
 
 impl RedisClient {
-    pub async fn new() -> Result<Self> {
-        let client = Client::open("redis://127.0.0.1/")?;
+    pub async fn new(client: Client) -> Result<Self> {
         let conn = client.get_multiplexed_tokio_connection().await?;
         Ok(RedisClient { connection: conn })
     }
@@ -50,7 +49,7 @@ impl RedisClient {
         Ok(())
     }
 
-    pub async fn lock_exclusive(&self, key: &str, timeout: i64) -> Result<(bool)> {
+    pub async fn lock_exclusive(&self, key: &str, timeout: i64) -> Result<bool> {
         let mut conn = self.connection.clone();
         let acquired: bool = conn.set_nx(&key, "lock").await?;
         if acquired {

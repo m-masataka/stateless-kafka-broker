@@ -18,28 +18,27 @@ use crate::common::record::Offset;
 
 pub struct FileLogStore {
     log_store_dir: PathBuf,
+    offset_store_dir: PathBuf,
 }
 
 impl FileLogStore {
     pub fn new() -> Self {
         Self {
             log_store_dir: Path::new("./data").to_owned(),
+            offset_store_dir: Path::new("./data").to_owned(),
         }
     }
 }
 
 impl LogStore for FileLogStore {
-    async fn write_batch(&self, topic: &str, partition: i32, records: Option<&Bytes>) -> anyhow::Result<i64> {
+    async fn write_batch(&self, topic_id: &str, partition: i32, records: Option<&Bytes>) -> anyhow::Result<i64> {
         if let Some(data) = records {
             let mut cursor = std::io::Cursor::new(data);
             let batch: RecordSet = RecordBatchDecoder::decode(&mut cursor)?;
 
-            let log_partition_dir = &self.log_store_dir.join(format!("{}/{}", topic, partition));
-            if !log_partition_dir.exists() {
-                create_dir_all(log_partition_dir)?;
-            }
-            let log_file_path = log_partition_dir.join("00000000000000000000.log");
-            let offset_file_path = log_partition_dir.join("offset.txt");
+            let log_file_path = self.get_log_file_path(topic_id, partition);
+            let offset_file_path = self.get_offset_file_path(topic_id, partition);
+
             // offset file open and lock
             let offset_file = OpenOptions::new()
                 .read(true)
@@ -85,12 +84,8 @@ impl LogStore for FileLogStore {
         }
     }
 
-    async fn read_records(&self, topic: &str, partition: i32, target_offset: i64, max_offset: i64) -> anyhow::Result<Bytes> {
-        let log_partition_dir = &self.log_store_dir.join(format!("{}/{}", topic, partition));
-        if !log_partition_dir.exists() {
-            create_dir_all(log_partition_dir)?;
-        }
-        let log_file_path = log_partition_dir.join("00000000000000000000.log");
+    async fn read_records(&self, topic_id: &str, partition: i32, target_offset: i64, max_offset: i64) -> anyhow::Result<Bytes> {
+        let log_file_path = self.get_log_file_path(topic_id, partition);
         // offset file open and lock
         let log_file = OpenOptions::new()
             .read(true)
@@ -120,8 +115,8 @@ impl LogStore for FileLogStore {
 
     }
 
-    async fn read_offset(&self, topic: &str, partition: i32) -> anyhow::Result<i64> {
-        let offset_file_path = self.log_store_dir.join(format!("{}/{}/offset.txt", topic, partition));
+    async fn read_offset(&self, topic_id: &str, partition: i32) -> anyhow::Result<i64> {
+        let offset_file_path = self.get_offset_file_path(topic_id, partition);
         let file = OpenOptions::new()
             .read(true)
             .open(offset_file_path)?;
@@ -131,41 +126,23 @@ impl LogStore for FileLogStore {
             Err(e) => Err(anyhow::anyhow!("Failed to read offset: {}", e)),
         }
     }
+}
 
-    async fn delete_topic_by_id(&self, topic_id: uuid::Uuid) -> anyhow::Result<()> {
-        let topic_dir = self.log_store_dir.join(topic_id.to_string());
-    
-        if topic_dir.exists() {
-            let prefix = timestamp_prefix();
-            let deleted_dir = self
-                .log_store_dir
-                .join(".deleted")
-                .join(format!("{}_{}", prefix, topic_id));
-    
-            fs::create_dir_all(deleted_dir.parent().unwrap())?;
-            fs::rename(&topic_dir, &deleted_dir)?;
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("Topic directory not found: {}", topic_id))
+impl FileLogStore {
+    pub fn get_log_file_path(&self, topic_id: &str, partition: i32) -> PathBuf {
+        let log_dir = &self.log_store_dir.join(format!("{}/{}", topic_id, partition));
+        if !log_dir.exists() {
+            let _ = create_dir_all(log_dir);
         }
+        return log_dir.join("00000000000000000000.log")
     }
-    
-    async fn delete_topic_by_name(&self, topic_name: &str) -> anyhow::Result<()> {
-        let topic_dir = self.log_store_dir.join(topic_name);
-    
-        if topic_dir.exists() {
-            let prefix = timestamp_prefix();
-            let deleted_dir = self
-                .log_store_dir
-                .join(".deleted")
-                .join(format!("{}_{}", prefix, topic_name));
-    
-            fs::create_dir_all(deleted_dir.parent().unwrap())?;
-            fs::rename(&topic_dir, &deleted_dir)?;
-            Ok(())
-        } else {
-            Err(anyhow::anyhow!("Topic directory not found: {}", topic_name))
+
+    pub fn get_offset_file_path(&self, topic_id: &str, partition: i32) -> PathBuf {
+        let offset_dir = &self.offset_store_dir.join(format!("{}/{}", topic_id, partition));
+        if !offset_dir.exists() {
+            let _ = create_dir_all(offset_dir);
         }
+        return offset_dir.join("offset.txt")
     }
 }
 

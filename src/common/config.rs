@@ -18,7 +18,6 @@ pub enum StorageBackendConfig {
     },
     Redis {
         url: String,
-        db: Option<i32>,
     },
 }
 

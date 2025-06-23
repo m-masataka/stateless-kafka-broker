@@ -1,4 +1,3 @@
-use aws_config::timeout;
 use serde::{Serialize, Deserialize};
 use std::time::SystemTime;
 use bytes::Bytes;

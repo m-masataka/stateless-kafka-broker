@@ -11,20 +11,15 @@ use kafka_protocol::messages::delete_topics_request::{
 };
 use kafka_protocol::error::ResponseError::UnknownTopicOrPartition;
 
-use crate::storage::log_store_impl::LogStoreImpl;
 use crate::storage::meta_store_impl::MetaStoreImpl;
 use crate::{common::{response::send_kafka_response}};
-use crate::traits::{
-    meta_store::MetaStore,
-    log_store::LogStore,
-};
+use crate::traits::meta_store::MetaStore;
 
 pub async fn handle_delete_topics_request<W>(
     stream: &mut W,
     header: &RequestHeader,
     request: &DeleteTopicsRequest,
     meta_store: &MetaStoreImpl,
-    log_store: &LogStoreImpl,
 ) -> Result<()>
 where
 W: AsyncWrite + Unpin + Send,
@@ -38,12 +33,12 @@ W: AsyncWrite + Unpin + Send,
     if header.request_api_version < 5 {
         for topic_name in &request.topic_names {
             log::debug!("Deleting topic by name: {}", topic_name.as_str());
-            let result = delete_topic_by_name(topic_name.as_str(), meta_store, log_store).await;
+            let result = delete_topic_by_name(topic_name.as_str(), meta_store).await;
             topic_responses.push(result);
         }
     } else {
         for topic in &request.topics {
-            let result = delete_topic(topic, meta_store, log_store).await;
+            let result = delete_topic(topic, meta_store).await;
             topic_responses.push(result);
         }
     }
@@ -52,20 +47,15 @@ W: AsyncWrite + Unpin + Send,
     Ok(())
 }
 
-async fn delete_topic(topic: &DeleteTopicState, meta_store: &MetaStoreImpl, log_store: &LogStoreImpl) -> DeletableTopicResult {
+async fn delete_topic(topic: &DeleteTopicState, meta_store: &MetaStoreImpl) -> DeletableTopicResult {
     if let Some(name) = &topic.name {
         log::debug!("Deleting topic by name: {}", name.as_str());
-        delete_topic_by_name(name.as_str(), meta_store, log_store).await
+        delete_topic_by_name(name.as_str(), meta_store).await
     } else {
         log::debug!("Deleting topic by ID: {}", topic.topic_id);
         match meta_store.delete_topic_by_id(topic.topic_id).await {
             Ok(_) => {
                 log::info!("Successfully deleted topic: {}", topic.topic_id);
-                log_store.delete_topic_by_id(topic.topic_id)
-                .await
-                .unwrap_or_else(|e| {
-                    log::error!("Failed to delete topic from log store: {}", e);
-                });
                 let mut result = DeletableTopicResult::default();
                 result.name = topic.name.clone();
                 result.topic_id = topic.topic_id;
@@ -88,17 +78,11 @@ async fn delete_topic(topic: &DeleteTopicState, meta_store: &MetaStoreImpl, log_
 async fn delete_topic_by_name(
     name: &str,
     meta_store: &MetaStoreImpl,
-    log_store: &LogStoreImpl,
 ) -> DeletableTopicResult {
     log::debug!("Deleting topic by name: {}", name);
     match meta_store.delete_topic_by_name(name).await {
         Ok(_) => {
             log::info!("Successfully deleted topic: {}", name);
-            log_store.delete_topic_by_name(name)
-            .await
-            .unwrap_or_else(|e| {
-                log::error!("Failed to delete topic from log store: {}", e);
-            });
             let mut result = DeletableTopicResult::default();
             result.name = Some(TopicName(name.to_string().into()));
             result.error_code = 0; // 0 means no error

@@ -1,11 +1,8 @@
 use crate::{common::record::{convert_kafka_record_to_record_entry, RecordEntry}, traits::log_store::LogStore};
 use std::{
-    fs::{create_dir_all, File, OpenOptions},
-    io::{self, BufRead, BufReader, Error, ErrorKind::InvalidData, Result, Seek, SeekFrom, Write},
-    path::{Path, PathBuf},
+    io::{self, BufReader, Result},
 };
 use bytes::{Buf, Bytes, BytesMut};
-use chrono::format;
 use kafka_protocol::records::{
     RecordBatchDecoder,
     RecordBatchEncoder,
@@ -102,14 +99,6 @@ impl LogStore for S3LogStore {
         } else {
             Err(anyhow::anyhow!("No records to write"))
         }
-    }
-
-    async fn delete_topic_by_id(&self, topic_id: uuid::Uuid) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    async fn delete_topic_by_name(&self, topic_name: &str) -> anyhow::Result<()> {
-        Ok(())
     }
 
     async fn read_offset(&self, topic: &str, partition: i32) -> anyhow::Result<i64> {

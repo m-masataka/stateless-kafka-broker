@@ -1,12 +1,13 @@
 use crate::storage::s3::s3_client::S3Client;
 use crate::storage::s3::s3_log_store::S3LogStore;
-use crate::traits::meta_store::MetaStore;
 use crate::storage::{
     file::file_meta_store::FileMetaStore,
     file::file_log_store::FileLogStore,
     log_store_impl::LogStoreImpl,
     meta_store_impl::MetaStoreImpl,
     s3::s3_meta_store::S3MetaStore,
+    redis::redis_meta_store::RedisMetaStore,
+    redis::redis_client::RedisClient,
 };
 
 use crate::handler::{
@@ -54,6 +55,7 @@ use kafka_protocol::messages::{
     consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
 };
 use kafka_protocol::protocol::Decodable;
+use redis::Client;
 
 pub async fn server_start() -> anyhow::Result<()> {
     env_logger::init();
@@ -70,6 +72,12 @@ pub async fn server_start() -> anyhow::Result<()> {
         StorageBackendConfig::File => {
             Arc::new(MetaStoreImpl::File(FileMetaStore::new()))
         },
+        StorageBackendConfig::Redis { url } => {
+            log::info!("Using Redis meta store");
+            let client = Client::open(url.clone())?;
+            let redis_client = RedisClient::new(client).await?;
+            Arc::new(MetaStoreImpl::Redis(RedisMetaStore::new(redis_client)))
+        }
         _ => {
             return Err(anyhow::anyhow!("Unsupported meta store backend"));
         }
@@ -160,7 +168,7 @@ async fn handle_connection(mut stream: tokio::net::TcpStream,
                 if let RequestKind::DeleteTopics(ref req) =
                     RequestKind::DeleteTopics(DeleteTopicsRequest::decode(&mut buf, header.request_api_version).unwrap())
                 {
-                    handle_delete_topics_request(&mut stream, &header, req, &*meta_store, &*log_store).await?;
+                    handle_delete_topics_request(&mut stream, &header, req, &*meta_store).await?;
                 }
             }
             ApiKey::FindCoordinator => {
