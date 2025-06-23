@@ -32,10 +32,10 @@ impl S3LogStore {
 }
 
 impl LogStore for S3LogStore {
-    async fn write_batch(&self, topic: &str, partition: i32, records: Option<&Bytes>) -> anyhow::Result<i64> {
+    async fn write_batch(&self, topic_id: &str, partition: i32, records: Option<&Bytes>) -> anyhow::Result<i64> {
         if let Some(data) = records {
-            let offset_key = self.offset_key(topic, partition);
-            let object_key = self.log_key(topic, partition);
+            let offset_key = self.offset_key(topic_id, partition);
+            let object_key = self.log_key(topic_id, partition);
             
             let (offset_data, offset_etag) = match self.s3_client.get_object(&self.bucket, &offset_key).await {
                 Ok((data, etag)) => (data, Some(etag)),
@@ -80,7 +80,7 @@ impl LogStore for S3LogStore {
                     e
                 })?;
             
-            log::debug!("Successfully wrote batch to S3 for topic: {}, partition: {}", topic, partition);
+            log::debug!("Successfully wrote batch to S3 for topic: {}, partition: {}", topic_id, partition);
 
             let output_offset = encode_offset(current_offset);
             let output_offset_str = String::from_utf8(output_offset.to_vec())
@@ -101,8 +101,8 @@ impl LogStore for S3LogStore {
         }
     }
 
-    async fn read_offset(&self, topic: &str, partition: i32) -> anyhow::Result<i64> {
-        let offset_key = self.offset_key(topic, partition);
+    async fn read_offset(&self, topic_id: &str, partition: i32) -> anyhow::Result<i64> {
+        let offset_key = self.offset_key(topic_id, partition);
         let (offset_data, _) = match self.s3_client.get_object(&self.bucket, &offset_key).await {
             Ok((data, etag)) => (data, Some(etag)),
             Err(e) => {
@@ -116,8 +116,8 @@ impl LogStore for S3LogStore {
         Ok(base_offset)
     }
 
-    async fn read_records(&self, topic: &str, partition: i32, offset: i64, max_offset: i64) -> anyhow::Result<Bytes> {
-        let object_key = self.log_key(topic, partition);
+    async fn read_records(&self, topic_id: &str, partition: i32, offset: i64, max_offset: i64) -> anyhow::Result<Bytes> {
+        let object_key = self.log_key(topic_id, partition);
         let (data, _) = match self.s3_client.get_object(&self.bucket, &object_key).await {
             Ok((data, etag)) => (data, Some(etag)),
             Err(e) => {
@@ -155,17 +155,17 @@ impl LogStore for S3LogStore {
 }
 
 impl S3LogStore {
-    fn offset_key(&self, topic: &str, partition: i32) -> String {
+    fn offset_key(&self, topic_id: &str, partition: i32) -> String {
         match &self.prefix {
-            Some(prefix) => format!("{}/{}/{}/{}", prefix, topic, partition, self.offset_file_name),
-            None => format!("{}/{}/{}", topic, partition, self.offset_file_name),
+            Some(prefix) => format!("{}/{}/{}/{}", prefix, topic_id, partition, self.offset_file_name),
+            None => format!("{}/{}/{}", topic_id, partition, self.offset_file_name),
         }
     }
 
-    fn log_key(&self, topic: &str, partition: i32) -> String {
+    fn log_key(&self, topic_id: &str, partition: i32) -> String {
         match &self.prefix {
-            Some(prefix) => format!("{}/{}/{}/{}", prefix, topic, partition, self.log_file_name),
-            None => format!("{}/{}/{}", topic, partition, self.log_file_name),
+            Some(prefix) => format!("{}/{}/{}/{}", prefix, topic_id, partition, self.log_file_name),
+            None => format!("{}/{}/{}", topic_id, partition, self.log_file_name),
         }
     }
 }
