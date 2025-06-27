@@ -45,7 +45,6 @@ pub struct ServerConfig {
 
     pub meta_store_type: StorageType, // "file", "s3", "redis"
     // Log Store configuration For Redis
-    pub meta_store_redis_url: Option<String>,
     // Log Store configuration For S3
     pub meta_store_s3_bucket: Option<String>,
     pub meta_store_s3_prefix: Option<String>,
