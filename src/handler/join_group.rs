@@ -11,7 +11,7 @@ use kafka_protocol::messages::join_group_response::{
 };
 
 use crate::common::consumer::{ConsumerGroup, ConsumerGroupMember};
-use crate::common::response::{send_kafka_response, send_kafka_response_insert_prefix};
+use crate::common::response::send_kafka_response;
 use crate::storage::meta_store_impl::MetaStoreImpl;
 use crate::traits::meta_store::MetaStore;
 use uuid::Uuid;
@@ -90,11 +90,7 @@ where
     log::debug!("JoinGroupResponse: {:?}", response);
 
     // レスポンスをエンコードして送信
-    if header.request_api_version > 5 {
-        send_kafka_response(stream, header, &response).await?;
-    } else {
-        send_kafka_response_insert_prefix(stream, header, &response, false).await?;
-    }
+    send_kafka_response(stream, header, &response).await?;
     log::debug!("Sent JoinGroupResponse");
     Ok(())
 }

@@ -1,4 +1,5 @@
-use aws_sdk_s3::{primitives::ByteStream, Client};
+use aws_config::Region;
+use aws_sdk_s3::{config::{Credentials, SharedCredentialsProvider}, primitives::ByteStream, Client};
 use bytes::Bytes;
 use anyhow::Result;
 
@@ -7,9 +8,17 @@ pub struct S3Client {
 }
 
 impl S3Client {
-    pub async fn new() -> Result<Self> {
-        let config = aws_config::load_from_env().await;
-        let client = Client::new(&config);
+    pub async fn new(endpoint: &str, access_key: &str, secret_key: &str, region: &str) -> Result<Self> {
+        log::info!("Creating S3 client with endpoint: {}, region: {}", endpoint, region);
+        let credentials = Credentials::new(access_key.to_string(), secret_key.to_string(), None, None, "custom");
+        let config = aws_sdk_s3::config::Builder::new()
+            .behavior_version_latest()
+            .region(Region::new(region.to_string()))
+            .credentials_provider(SharedCredentialsProvider::new(credentials))
+            .force_path_style(true)
+            .endpoint_url(endpoint.to_string())
+            .build();
+        let client = Client::from_conf(config);
         Ok(S3Client { client })
     }
 
@@ -28,7 +37,7 @@ impl S3Client {
         Ok((data, etag))
     }
 
-    pub async fn put_object(&self, bucket: &str, key: &str, body: &str, etag: Option<String>) -> Result<()> {
+    pub async fn put_object(&self, bucket: &str, key: &str, body: &Vec<u8>, etag: Option<String>) -> Result<()> {
         let response = match etag {
             Some(etag) => {
                 log::debug!("Putting object to S3 with ETag: {}", etag);
@@ -36,7 +45,7 @@ impl S3Client {
                     .put_object()
                     .bucket(bucket)
                     .key(key)
-                    .body(ByteStream::from(body.as_bytes().to_vec()))
+                    .body(ByteStream::from(body.clone()))
                     .set_if_match(Some(etag)) // CAS Lock
                     .send()
                     .await
@@ -47,7 +56,7 @@ impl S3Client {
                     .put_object()
                     .bucket(bucket)
                     .key(key)
-                    .body(ByteStream::from(body.as_bytes().to_vec()))
+                    .body(ByteStream::from(body.clone()))
                     .send()
                     .await
             }

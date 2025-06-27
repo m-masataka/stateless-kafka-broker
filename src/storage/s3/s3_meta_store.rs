@@ -26,11 +26,11 @@ impl S3MetaStore {
 }
 
 impl UnsendMetaStore for S3MetaStore {
-    async fn save_topic_partition_info(&self, data: &crate::common::topic_partition::Topic) -> Result<()> {
+    async fn save_topic_partition(&self, data: &crate::common::topic_partition::Topic) -> Result<()> {
         Ok(())
     }
 
-    async fn get_topic_info(&self, name: Option<&str>, topic_id: Option<&str>) -> Result<Option<Topic>> {
+    async fn get_topic(&self, name: Option<&str>, topic_id: Option<&str>) -> Result<Option<Topic>> {
         Ok(None)
     }
 
@@ -44,6 +44,10 @@ impl UnsendMetaStore for S3MetaStore {
 
     async fn get_all_topics(&self) -> Result<Vec<Topic>> {
         Ok(Vec::new())
+    }
+
+    async fn get_topic_id_by_topic_name(&self, topic_name: &str) -> Result<Option<String>> {
+        Ok(None)
     }
 
     async fn save_consumer_group(&self, data: &crate::common::consumer::ConsumerGroup) -> Result<()> {

@@ -30,7 +30,7 @@ where
     let mut response_topics = Vec::new();
     for topic in &request.topics {
         let mut topic_result = CreatableTopicResult::default();
-        match meta_store.get_topic_info(Some(topic.name.as_ref()), None).await {
+        match meta_store.get_topic(Some(topic.name.as_ref()), None).await {
             Ok(Some(store_topic)) => {
                 log::info!("Topic already exists: {}", store_topic.name.as_ref().unwrap());
                 topic_result.name = topic.name.clone();
@@ -48,7 +48,7 @@ where
                     partitions: None,
                     topic_authorized_operations: None, 
                 };
-                meta_store.save_topic_partition_info(&topic_metadata).await?;
+                meta_store.save_topic_partition(&topic_metadata).await?;
             },
             Ok(None) => {
                 log::info!("Creating new topic: {}", topic.name.as_str());
@@ -66,7 +66,7 @@ where
                     partitions: None,
                     topic_authorized_operations: None, 
                 };
-                meta_store.save_topic_partition_info(&topic_metadata).await?;
+                meta_store.save_topic_partition(&topic_metadata).await?;
             },
             Err(e) => {
                 log::error!("Error checking topic existence: {}", e);

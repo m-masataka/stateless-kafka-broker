@@ -72,7 +72,7 @@ where
             for request_topic in topics.iter() {
                 if let Some(name) = &request_topic.name {
                     log::debug!("Requesting metadata for topic: {}", name.as_str());
-                    match meta_store.get_topic_info(Some(name), None).await {
+                    match meta_store.get_topic(Some(name), None).await {
                         Ok(Some(topic_info)) => {
                             response_topics.push(to_metadata_response_topic(&topic_info, leader_id));
                         }
@@ -84,7 +84,7 @@ where
                             response_topics.push(topic_response);
                         }
                         Err(e) => {
-                            log::error!("Failed to fetch topic {}: {}", name.as_str(), e);
+                            log::error!("Failed to get topic {}: {}", name.as_str(), e);
                             let mut topic_response = MetadataResponseTopic::default();
                             topic_response.name = Some(name.clone());
                             topic_response.error_code = UnknownTopicOrPartition.code();

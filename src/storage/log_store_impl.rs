@@ -10,24 +10,17 @@ pub enum LogStoreImpl {
 }
 
 impl LogStore for LogStoreImpl {
-    async fn write_batch(&self, topic: &str, partition: i32, records: Option<&Bytes>) -> anyhow::Result<i64> {
+    async fn write_records(&self, topic: &str, partition: i32, start_offset: i64, records: Option<&Bytes>) -> anyhow::Result<(i64, String)> {
         match self {
-            LogStoreImpl::File(f) => f.write_batch(topic, partition, records).await,
-            LogStoreImpl::S3(s) => s.write_batch(topic, partition, records).await,
+            LogStoreImpl::File(f) => f.write_records(topic, partition, start_offset, records).await,
+            LogStoreImpl::S3(s) => s.write_records(topic, partition, start_offset, records).await,
         }
     }
 
-    async fn read_records(&self, topic: &str, partition: i32, offset: i64, max_offset: i64) -> anyhow::Result<Bytes> {
+    async fn read_records(&self, keys: Vec<String>) -> anyhow::Result<Bytes> {
         match self {
-            LogStoreImpl::File(f) => f.read_records(topic, partition, offset, max_offset).await,
-            LogStoreImpl::S3(s) => s.read_records(topic, partition, offset, max_offset).await,
-        }
-    }
-
-    async fn read_offset(&self, topic: &str, partition: i32) -> anyhow::Result<i64> {
-        match self {
-            LogStoreImpl::File(f) => f.read_offset(topic, partition).await,
-            LogStoreImpl::S3(s) => s.read_offset(topic, partition).await,
+            LogStoreImpl::File(f) => f.read_records(keys).await,
+            LogStoreImpl::S3(s) => s.read_records(keys).await,
         }
     }
 }

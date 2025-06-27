@@ -1,25 +1,8 @@
 use serde::Deserialize;
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum StorageBackend {
-    File,
-    S3,
-    Redis,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
-pub enum StorageBackendConfig {
-    File, // 設定不要
-    S3 {
-        bucket: String,
-        prefix: Option<String>,
-    },
-    Redis {
-        url: String,
-    },
-}
+use config::{Config, Environment};
+use std::fs::File;
+use std::io::BufReader;
+use anyhow::Result;
 
 #[derive(Debug, Deserialize)]
 pub struct BrokerConfig {
@@ -35,14 +18,57 @@ pub struct ClusterConfig {
     pub node_id: i32,
     pub host: String,
     pub port: i32,
-    pub log_store: StorageBackendConfig,
-    pub meta_store: StorageBackendConfig,
     pub brokers: Vec<BrokerConfig>,
 }
 
-use std::fs::File;
-use std::io::BufReader;
-use anyhow::Result;
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]  // "s3", "file", "redis"
+pub enum StorageType {
+    File,
+    S3,
+    Redis,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ServerConfig {
+    pub host: String,
+    pub port: i32,
+
+    pub log_store_type: StorageType,
+    // Log Store configuration For S3
+    pub log_store_s3_bucket: Option<String>,
+    pub log_store_s3_prefix: Option<String>,
+    pub log_store_s3_endpoint: Option<String>,
+    pub log_store_s3_access_key: Option<String>,
+    pub log_store_s3_secret_key: Option<String>,
+    pub log_store_s3_region: Option<String>,
+
+    pub meta_store_type: StorageType, // "file", "s3", "redis"
+    // Log Store configuration For Redis
+    pub meta_store_redis_url: Option<String>,
+    // Log Store configuration For S3
+    pub meta_store_s3_bucket: Option<String>,
+    pub meta_store_s3_prefix: Option<String>,
+    pub meta_store_s3_endpoint: Option<String>,
+    pub meta_store_s3_access_key: Option<String>,
+    pub meta_store_s3_secret_key: Option<String>,
+    pub meta_store_s3_region: Option<String>,
+
+    pub index_store_type: StorageType, // "file", "s3", "redis"
+    pub index_store_redis_url: Option<String>,
+}
+
+pub fn load_server_config() -> Result<ServerConfig> {
+    dotenv::dotenv().ok(); // 開発用
+    let cfg = Config::builder()
+        .add_source(Environment::default()
+            .prefix("KAFKA")
+            .try_parsing(true)
+        )
+        .build()?;
+    let config: ServerConfig = cfg.try_deserialize()?;
+    Ok(config)
+}
 
 pub fn load_cluster_config(path: &str) -> Result<ClusterConfig> {
     let file = File::open(path)?;

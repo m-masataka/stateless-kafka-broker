@@ -17,6 +17,9 @@ env_logger = "0.11.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_bytes = "0.11" 
+bincode = "2.0.1"
+config = "0.15.11"
+dotenv = "0.15"
 
 base64 = "0.22.1"
 fs2 = "0.4"
@@ -25,7 +28,7 @@ tokio = { version = "1", features = ["full"] }
 chrono = { version = "0.4", features = ["clock"] }
 
 aws-config = "1"
-aws-sdk-s3 = "1.93.0"
+aws-sdk-s3 = "1.94.0"
 
 redis = { version = "0.32.2", features = ["tokio-comp"] }
 trait-variant = "0.1"

@@ -1,3 +1,5 @@
+use crate::storage::index_store_impl::IndexStoreImpl;
+use crate::storage::redis::redis_index_store::RedisIndexStore;
 use crate::storage::s3::s3_client::S3Client;
 use crate::storage::s3::s3_log_store::S3LogStore;
 use crate::storage::{
@@ -7,7 +9,6 @@ use crate::storage::{
     meta_store_impl::MetaStoreImpl,
     s3::s3_meta_store::S3MetaStore,
     redis::redis_meta_store::RedisMetaStore,
-    redis::redis_client::RedisClient,
 };
 
 use crate::handler::{
@@ -27,8 +28,9 @@ use crate::handler::{
     leave_group::handle_leave_group_request,
     consumer_group_heartbeat::handle_consumer_group_heartbeat_request,
 };
-use crate::common::config::{load_cluster_config, ClusterConfig, StorageBackendConfig};
+use crate::common::config::{load_cluster_config, load_server_config, ClusterConfig, StorageType};
 use anyhow::Result;
+use tokio::sync::Mutex;
 use std::{
     sync::Arc,
 };
@@ -59,39 +61,69 @@ use redis::Client;
 
 pub async fn server_start() -> anyhow::Result<()> {
     env_logger::init();
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:9092").await?;
-    log::info!("Kafka-compatible server listening on port 9092");
-
+    log::info!("Starting Kafka-compatible server...");
     let cluster_conf_load = Arc::new(load_cluster_config("config/cluster.json")?);
-    let meta_store_load =  match &cluster_conf_load.meta_store {
-        StorageBackendConfig::S3 { bucket, prefix } => {
+    let server_config = load_server_config()?;
+
+
+    let listener = tokio::net::TcpListener::bind(format!("{}:{}", server_config.host, server_config.port)).await?;
+    log::info!("Kafka-compatible server listening on port {}:{}", server_config.host, server_config.port);
+
+    let meta_store_load =  match &server_config.meta_store_type {
+        StorageType::S3 => {
             log::info!("Using S3 meta store");
-            let s3_client = S3Client::new().await?;
-            Arc::new(MetaStoreImpl::S3(S3MetaStore::new(s3_client, bucket.clone(), prefix.clone())))
+            let bucket = server_config.meta_store_s3_bucket.clone().ok_or_else(|| anyhow::anyhow!("S3 bucket not configured"))?;
+            let prefix = server_config.meta_store_s3_prefix.clone();
+            let endpoint = server_config.meta_store_s3_endpoint.clone().unwrap_or_else(|| "https://s3.amazonaws.com".to_string());
+            let access_key = server_config.meta_store_s3_access_key.clone().ok_or_else(|| anyhow::anyhow!("S3 access key not configured"))?;
+            let secret_key = server_config.meta_store_s3_secret_key.clone().ok_or_else(|| anyhow::anyhow!("S3 secretkey not configured"))?;
+            let region = server_config.meta_store_s3_region.clone().unwrap_or_else(|| "us-east-1".to_string());
+            let s3_client = S3Client::new(&endpoint, &access_key, &secret_key, &region).await?;
+            Arc::new(MetaStoreImpl::S3(S3MetaStore::new(s3_client, bucket, prefix)))
         },
-        StorageBackendConfig::File => {
+        StorageType::File => {
             Arc::new(MetaStoreImpl::File(FileMetaStore::new()))
         },
-        StorageBackendConfig::Redis { url } => {
+        StorageType::Redis => {
             log::info!("Using Redis meta store");
-            let client = Client::open(url.clone())?;
-            let redis_client = RedisClient::new(client).await?;
-            Arc::new(MetaStoreImpl::Redis(RedisMetaStore::new(redis_client)))
+            let url = server_config.index_store_redis_url.clone().ok_or_else(|| anyhow::anyhow!("Redis URL not configured"))?;
+            let client = Client::open(url)?;
+            let conn = client.get_multiplexed_async_connection().await?;
+            Arc::new(MetaStoreImpl::Redis(RedisMetaStore::new(Arc::new(Mutex::new(conn)))))
         }
     };
 
-    let log_store_load = match &cluster_conf_load.log_store {
-        StorageBackendConfig::S3 { bucket, prefix } => {
+    let log_store_load = match &server_config.log_store_type {
+        StorageType::S3 => {
             log::info!("Using S3 log store");
-            let s3_client = S3Client::new().await?;
-            Arc::new(LogStoreImpl::S3(S3LogStore::new(s3_client, bucket.clone(), prefix.clone())))
+            let bucket = server_config.log_store_s3_bucket.clone().ok_or_else(|| anyhow::anyhow!("S3 bucket not configured"))?;
+            let prefix = server_config.log_store_s3_prefix.clone();
+            let endpoint = server_config.log_store_s3_endpoint.clone().unwrap_or_else(|| "https://s3.amazonaws.com".to_string());
+            let access_key = server_config.log_store_s3_access_key.clone().ok_or_else(|| anyhow::anyhow!("S3 access key not configured"))?;
+            let secret_key = server_config.log_store_s3_secret_key.clone().ok_or_else(|| anyhow::anyhow!("S3 secretkey not configured"))?;
+            let region = server_config.log_store_s3_region.clone().unwrap_or_else(|| "us-east-1".to_string());
+            let s3_client = S3Client::new(&endpoint, &access_key, &secret_key, &region).await?;
+            Arc::new(LogStoreImpl::S3(S3LogStore::new(s3_client, bucket, prefix)))
         },
-        StorageBackendConfig::File => {
+        StorageType::File => {
             log::info!("Using File log store");
             Arc::new(LogStoreImpl::File(FileLogStore::new()))
         },
         _ => {
             return Err(anyhow::anyhow!("Unsupported log store backend"));
+        }
+    };
+
+    let index_store_load = match &server_config.index_store_type {
+        StorageType::Redis => {
+            log::info!("Using Redis index store");
+            let url = server_config.index_store_redis_url.clone().ok_or_else(|| anyhow::anyhow!("Redis URL not configured"))?;
+            let client = Client::open(url)?;
+            let conn = client.get_multiplexed_async_connection().await?;
+            Arc::new(IndexStoreImpl::Redis(RedisIndexStore::new(Arc::new(Mutex::new(conn)))))
+        },
+        _ => {
+            return Err(anyhow::anyhow!("Unsupported index store backend"));
         }
     };
     
@@ -101,10 +133,11 @@ pub async fn server_start() -> anyhow::Result<()> {
         let cluster_config = cluster_conf_load.clone();
         let meta_store = meta_store_load.clone();
         let log_store = log_store_load.clone();
+        let index_store = index_store_load.clone();
 
         // Spawn a new task for each connection
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, cluster_config, meta_store, log_store).await {
+            if let Err(e) = handle_connection(stream, cluster_config, meta_store, log_store, index_store).await {
                 log::error!("Connection error: {:?}", e);
             }
         });
@@ -115,6 +148,7 @@ async fn handle_connection(mut stream: tokio::net::TcpStream,
     cluster_config: Arc<ClusterConfig>,
     meta_store: Arc<MetaStoreImpl>,
     log_store: Arc<LogStoreImpl>,
+    index_store: Arc<IndexStoreImpl>,
 ) -> Result<()> {
     loop {
         // Read length prefix
@@ -231,7 +265,7 @@ async fn handle_connection(mut stream: tokio::net::TcpStream,
                 if let RequestKind::Fetch(ref req) =
                     RequestKind::Fetch(FetchRequest::decode(&mut buf, header.request_api_version).unwrap())
                 {
-                    handle_fetch_request(&mut stream, &header, req, &*log_store).await?;
+                    handle_fetch_request(&mut stream, &header, req, &*log_store, &*meta_store, &*index_store).await?;
                 }
             },
             ApiKey::Produce => {
@@ -239,7 +273,7 @@ async fn handle_connection(mut stream: tokio::net::TcpStream,
                 if let RequestKind::Produce(ref req) =
                     RequestKind::Produce(ProduceRequest::decode(&mut buf, header.request_api_version).unwrap())
                 {
-                    handle_produce_request(&mut stream, &header, req, &cluster_config, &*meta_store, &*log_store).await?;
+                    handle_produce_request(&mut stream, &header, req, &cluster_config, &*meta_store, &*log_store, &*index_store).await?;
                 }
             }
             ApiKey::CreateTopics => {

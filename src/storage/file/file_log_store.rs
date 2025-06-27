@@ -1,199 +1,120 @@
-use crate::{common::record::convert_kafka_record_to_record_entry, traits::log_store::UnsendLogStore};
+use crate::traits::log_store::UnsendLogStore;
 use std::{
     fs::{create_dir_all, File, OpenOptions},
-    io::{self, BufRead, BufReader, Error, ErrorKind::InvalidData, Result, Seek, SeekFrom, Write},
+    io::{Error, ErrorKind::InvalidData, Read, Result, Write},
     path::{Path, PathBuf},
 };
 use bytes::Bytes;
 use kafka_protocol::records::{
-    RecordBatchDecoder,
     RecordBatchEncoder,
-    RecordSet,
 };
 use fs2::FileExt;
-use chrono::Local;
-use crate::common::record::RecordEntry;
-use crate::common::record::Offset;
+use crate::common::record::{bytes_to_output, record_bytes_to_kafka_response_bytes};
 
 pub struct FileLogStore {
     log_store_dir: PathBuf,
-    offset_store_dir: PathBuf,
+    log_file_name_prefix: String,
 }
 
 impl FileLogStore {
     pub fn new() -> Self {
         Self {
             log_store_dir: Path::new("./data").to_owned(),
-            offset_store_dir: Path::new("./data").to_owned(),
+            log_file_name_prefix: "log-file-".to_string(),
         }
     }
 }
 
 impl UnsendLogStore for FileLogStore {
-    async fn write_batch(&self, topic_id: &str, partition: i32, records: Option<&Bytes>) -> anyhow::Result<i64> {
+    async fn write_records(&self, topic_id: &str, partition: i32, start_offset: i64,  records: Option<&Bytes>) -> anyhow::Result<(i64, String)> {
+        // Check if the log store directory exists, if not create it
         if let Some(data) = records {
-            let mut cursor = std::io::Cursor::new(data);
-            let batch: RecordSet = RecordBatchDecoder::decode(&mut cursor)?;
-
-            let log_file_path = self.get_log_file_path(topic_id, partition);
-            let offset_file_path = self.get_offset_file_path(topic_id, partition);
-
-            // offset file open and lock
-            let offset_file = OpenOptions::new()
-                .read(true)
-                .write(true)
-                .create(true)
-                .truncate(false)
-                .open(offset_file_path)?;
-            offset_file.lock_exclusive()?;
-            let base_offset = read_offset_from_file(&offset_file)?;
-
-            // log file open and lock
-            let mut log_file = OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(log_file_path)?;
-            log_file.lock_exclusive()?;
-
-            let mut entries = Vec::with_capacity(batch.records.len());
-            batch.records.iter()
-                .enumerate()
-                .for_each(|(i, r)| {
-                    let entry = convert_kafka_record_to_record_entry(r, base_offset as i64 + i as i64 + 1);
-                    entries.push(entry);
-                });
-            let joined = entries
-                .into_iter()
-                .map(|entry| {
-                    serde_json::to_string(&entry).map_err(io::Error::other)
-                })
-                .collect::<std::result::Result<Vec<_>, io::Error>>()?
-                .join("\n");
-            writeln!(log_file, "{}", joined)?;
-
-            FileExt::unlock(&log_file)?;
-            // Updated offset file
-            let current_offset = base_offset + batch.records.len() as i64;
-            write_offset_to_file(&offset_file, current_offset)?;
-            FileExt::unlock(&offset_file)?;
-
-            Ok(base_offset)
+            let object_key = self.log_key(topic_id, partition, start_offset);
+            
+            let (output, current_offset) = bytes_to_output(data, start_offset)?;
+            
+            self.put_object(&object_key, &output)
+                .map_err(|e| {
+                    log::error!("Failed to put object to Dir: {:?}", e);
+                    e
+                })?;
+            
+            log::debug!("Successfully wrote batch to file for topic: {}, partition: {}", topic_id, partition);
+            let object_key_str = object_key.to_str().unwrap_or("Invalid UTF-8 path").to_string();
+            Ok((current_offset, object_key_str))
         } else {
-            Err(anyhow::anyhow!("No records provided"))
+            Err(anyhow::anyhow!("No records to write"))
         }
     }
 
-    async fn read_records(&self, topic_id: &str, partition: i32, target_offset: i64, max_offset: i64) -> anyhow::Result<Bytes> {
-        let log_file_path = self.get_log_file_path(topic_id, partition);
-        // offset file open and lock
-        let log_file = OpenOptions::new()
-            .read(true)
-            .open(log_file_path)?;
-
-        match read_record_from_file(&log_file, target_offset, max_offset) {
-            Ok(record_entries) => {
-                let records: Vec<kafka_protocol::records::Record> = record_entries
-                    .into_iter()
-                    .filter_map(|record_entry| {
-                        record_entry
-                            .convert_to_kafka_record()
-                    }).collect();
-                log::debug!("Records read: {:?}", records);
-                let mut data = Vec::new();
-                let encode_options = kafka_protocol::records::RecordEncodeOptions{
-                    version: 2,
-                    compression: kafka_protocol::records::Compression::None,
-                };
-                if let Err(e) = RecordBatchEncoder::encode(&mut data, &records, &encode_options) {
-                    return Err(anyhow::anyhow!("Failed to encode record batch: {}", e));
+    async fn read_records(&self, keys: Vec<String>) -> anyhow::Result<Bytes> {
+        // Read records from file, and return Bytes encoded data.
+        if keys.is_empty() {
+            return Err(anyhow::anyhow!("No keys provided for reading records"));
+        }
+        let mut response = Vec::new();
+        for key in keys {
+            let key_path = PathBuf::from(&key);
+            let data = match self.get_object(key_path.as_path()) {
+                Ok((data)) => data,
+                Err(e) => {
+                    // If the object does not exist, we initialize it with an empty log
+                    log::warn!("Log object not found. Initializing with empty log. Error: {:?}", e);
+                    let init_log = Vec::new();
+                    Bytes::from(init_log)
                 }
-                Ok(Bytes::from(data))
-            },
-            Err(e) => Err(anyhow::anyhow!("Failed to read record: {}", e)),
+            };
+            let records = record_bytes_to_kafka_response_bytes(&data).map_err(|e| {
+                log::error!("Failed to read record from S3: {}", e);
+                e
+            })?;
+            response.extend_from_slice(&records);
         }
-
-    }
-
-    async fn read_offset(&self, topic_id: &str, partition: i32) -> anyhow::Result<i64> {
-        let offset_file_path = self.get_offset_file_path(topic_id, partition);
-        let file = OpenOptions::new()
-            .read(true)
-            .open(offset_file_path)?;
-        let current_offset = read_offset_from_file(&file);
-        match current_offset {
-            Ok(offset) => Ok(offset),
-            Err(e) => Err(anyhow::anyhow!("Failed to read offset: {}", e)),
+        // Encode the records back to Bytes
+        let encode_options = kafka_protocol::records::RecordEncodeOptions{
+            version: 2,
+            compression: kafka_protocol::records::Compression::None,
+        };
+        let mut data = Vec::new();
+        if let Err(e) = RecordBatchEncoder::encode(&mut data, &response, &encode_options) {
+            return Err(anyhow::anyhow!("Failed to encode record batch: {}", e));
         }
+        Ok(Bytes::from(data))
     }
 }
 
 impl FileLogStore {
-    pub fn get_log_file_path(&self, topic_id: &str, partition: i32) -> PathBuf {
-        let log_dir = &self.log_store_dir.join(format!("{}/{}", topic_id, partition));
-        if !log_dir.exists() {
-            let _ = create_dir_all(log_dir);
-        }
-        return log_dir.join("00000000000000000000.log")
+    fn log_key(&self, topic_id: &str, partition: i32, offset: i64) -> PathBuf {
+        self.log_store_dir.join(format!("{}/{}/{}{}.log", topic_id, partition, self.log_file_name_prefix, offset))
     }
 
-    pub fn get_offset_file_path(&self, topic_id: &str, partition: i32) -> PathBuf {
-        let offset_dir = &self.offset_store_dir.join(format!("{}/{}", topic_id, partition));
-        if !offset_dir.exists() {
-            let _ = create_dir_all(offset_dir);
+    fn put_object(&self, path: &Path, data: &[u8]) -> Result<()> {
+        if !path.exists() {
+            let parent_dir =  path.parent().ok_or_else(|| {
+                Error::new(InvalidData, "Path has no parent directory")
+            })?;
+            let _ = create_dir_all(parent_dir);
         }
-        return offset_dir.join("offset.txt")
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(path)?;
+        file.lock_exclusive()?;
+        file.write_all(data)?;
+        file.flush()?;
+        FileExt::unlock(&file)?;
+        Ok(())
     }
-}
 
-fn read_offset_from_file(file: &File) -> Result<i64> {
-    let reader = BufReader::new(file);
-    match  serde_json::from_reader::<_, Offset>(reader) {
-        Ok(offset) => Ok(offset.offset),
-        Err(e) => {
-            if e.is_eof() || e.is_data() {
-                Ok(-1)
-            } else {
-                Err(Error::new(InvalidData, e))
-            }
-        },
-    }
-}
-
-fn write_offset_to_file(mut file: &File, offset: i64) -> Result<()> {
-    file.set_len(0)?;
-    file.seek(SeekFrom::Start(0))?;
-    let offset_entry = Offset {
-        offset,
-    };
-    serde_json::to_writer(file, &offset_entry)?;
-    Ok(())
-}
-
-fn read_record_from_file(file: &File, target_offset: i64, max_offset: i64) -> Result<Vec<RecordEntry>> {
-    let reader = BufReader::new(file);
-    let mut result = Vec::new();
-
-    for line in reader.lines() {
-        let line = line.map_err(|e| {
-            io::Error::other(
-                format!("failed to read line from file: {}", e),
-            )
-        })?;
-
-        let parsed: RecordEntry = serde_json::from_str(&line).map_err(|e| {
-            io::Error::other(
-                format!("failed to parse JSON line into RecordEntry: {}", e),
-            )
-        })?;
-
-        let parsed_offset = parsed.offset; // Clone or copy the offset field
-        if parsed_offset >= target_offset && parsed_offset < max_offset {
-            result.push(parsed);
+    fn get_object(&self, path: &Path) -> Result<Bytes> {
+        if !path.exists() {
+            return Err(Error::new(InvalidData, "File does not exist"));
         }
-
-        if parsed_offset >= max_offset {
-            break; // Stop reading if we have reached or exceeded the max_offset
-        }
+        let mut file = File::open(path)?;
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer)?;
+        let bytes = Bytes::from(buffer);
+        Ok(bytes)
     }
-    Ok(result)
 }

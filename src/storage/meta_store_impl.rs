@@ -16,19 +16,19 @@ pub enum MetaStoreImpl {
 }
 
 impl MetaStore for MetaStoreImpl {
-    async fn save_topic_partition_info(&self, data: &Topic) -> Result<()> {
+    async fn save_topic_partition(&self, data: &Topic) -> Result<()> {
         match self {
-            MetaStoreImpl::File(f) => f.save_topic_partition_info(data).await,
-            MetaStoreImpl::S3(s) => s.save_topic_partition_info(data).await,
-            MetaStoreImpl::Redis(r) => r.save_topic_partition_info(data).await,
+            MetaStoreImpl::File(f) => f.save_topic_partition(data).await,
+            MetaStoreImpl::S3(s) => s.save_topic_partition(data).await,
+            MetaStoreImpl::Redis(r) => r.save_topic_partition(data).await,
         }
     }
 
-    async fn get_topic_info(&self, name: Option<&str>, topic_id: Option<&str>) -> Result<Option<Topic>> {
+    async fn get_topic(&self, name: Option<&str>, topic_id: Option<&str>) -> Result<Option<Topic>> {
         match self {
-            MetaStoreImpl::File(f) => f.get_topic_info(name, topic_id).await,
-            MetaStoreImpl::S3(s) => s.get_topic_info(name, topic_id).await,
-            MetaStoreImpl::Redis(r) => r.get_topic_info(name, topic_id).await,
+            MetaStoreImpl::File(f) => f.get_topic(name, topic_id).await,
+            MetaStoreImpl::S3(s) => s.get_topic(name, topic_id).await,
+            MetaStoreImpl::Redis(r) => r.get_topic(name, topic_id).await,
         }
     }
 
@@ -53,6 +53,14 @@ impl MetaStore for MetaStoreImpl {
             MetaStoreImpl::File(f) => f.get_all_topics().await,
             MetaStoreImpl::S3(s) => s.get_all_topics().await,
             MetaStoreImpl::Redis(r) => r.get_all_topics().await,
+        }
+    }
+
+    async fn get_topic_id_by_topic_name(&self, topic_name: &str) -> Result<Option<String>> {
+        match self {
+            MetaStoreImpl::File(f) => f.get_topic_id_by_topic_name(topic_name).await,
+            MetaStoreImpl::S3(s) => s.get_topic_id_by_topic_name(topic_name).await,
+            MetaStoreImpl::Redis(r) => r.get_topic_id_by_topic_name(topic_name).await,
         }
     }
 

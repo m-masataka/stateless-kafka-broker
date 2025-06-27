@@ -39,7 +39,7 @@ impl FileMetaStore {
 }
 
 impl UnsendMetaStore for FileMetaStore {
-    async fn save_topic_partition_info(&self, data: &Topic) -> Result<()> {
+    async fn save_topic_partition(&self, data: &Topic) -> Result<()> {
         let mut metadata_map: HashMap<String, Topic> = match File::open(&self.meta_store_path) {
             Ok(mut file) => {
                 let mut contents = String::new();
@@ -66,7 +66,7 @@ impl UnsendMetaStore for FileMetaStore {
         Ok(())
     }
 
-    async fn get_topic_info(&self, name: Option<&str>, topic_id: Option<&str>) -> Result<Option<Topic>> {
+    async fn get_topic(&self, name: Option<&str>, topic_id: Option<&str>) -> Result<Option<Topic>> {
         let file = match File::open(&self.meta_store_path) {
             Ok(f) => f,
             Err(e) if e.kind() == NotFound => return Ok(None),
@@ -94,6 +94,25 @@ impl UnsendMetaStore for FileMetaStore {
         let map: HashMap<String, Topic> = serde_json::from_reader(reader)?;
     
         Ok(map.values().cloned().collect())
+    }
+
+    async fn get_topic_id_by_topic_name(&self, topic_name: &str) -> Result<Option<String>> {
+        let file = match File::open(&self.meta_store_path) {
+            Ok(f) => f,
+            Err(e) if e.kind() == NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
+    
+        let reader = BufReader::new(file);
+        let map: HashMap<String, Topic> = serde_json::from_reader(reader)?;
+    
+        for (id, topic) in map.iter() {
+            if topic.name.as_deref() == Some(topic_name) {
+                return Ok(Some(id.clone()));
+            }
+        }
+    
+        Ok(None)
     }
 
     async fn delete_topic_by_name(&self, name: &str) -> Result<()> {
@@ -460,7 +479,7 @@ impl UnsendMetaStore for FileMetaStore {
         let mut producer_id: ProducerId = match serde_json::from_reader(&file) {
             Ok(id) => id,
             Err(e) if e.is_eof() => ProducerId { producer_id: 0 },
-            Err(e) => ProducerId { producer_id: 0 },
+            Err(_e) => ProducerId { producer_id: 0 },
         };
         producer_id.producer_id += 1;
         log::debug!("Generated new producer ID: {}", producer_id.producer_id);

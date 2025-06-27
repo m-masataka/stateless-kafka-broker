@@ -14,14 +14,13 @@ RUN cargo build --release || true
 COPY . .
 RUN cargo build --release
 
-FROM debian:bullseye-slim
+FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/serverless_kafka_broker /usr/local/bin/server
 
-# ポート指定（必要に応じて）
 EXPOSE 8080
+WORKDIR /app
 
-# 実行
 CMD ["server"]

@@ -22,3 +22,10 @@ Thumbs.db
 # dotenv or secrets
 .env
 .env.*
+
+# dev
+.vscode
+data
+local
+tests
+config/cluster.json

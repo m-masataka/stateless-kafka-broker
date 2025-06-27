@@ -20,8 +20,8 @@ use kafka_protocol::
 
 use crate::{
     common::response::send_kafka_response,
-    storage::{log_store_impl::LogStoreImpl, meta_store_impl::MetaStoreImpl},
-    traits::{log_store::LogStore, meta_store::MetaStore}
+    storage::{index_store_impl::IndexStoreImpl, log_store_impl::LogStoreImpl, meta_store_impl::MetaStoreImpl},
+    traits::{index_store::IndexStore, log_store::LogStore, meta_store::MetaStore}
 };
 use crate::common::config::ClusterConfig;
 
@@ -34,6 +34,7 @@ pub async fn handle_produce_request<W>(
     cluster_config: &ClusterConfig,
     meta_store: &MetaStoreImpl,
     log_store: &LogStoreImpl,
+    index_store: &IndexStoreImpl,
 ) -> Result<()> 
 where
     W: AsyncWrite + Unpin + Send,
@@ -56,7 +57,7 @@ where
             let mut partition_produce_response = PartitionProduceResponse::default();
             partition_produce_response.index = request_partition_data.index;
 
-            let topic_info = meta_store.get_topic_info(Some(topic_data.name.clone().as_str()), None).await
+            let topic_info = meta_store.get_topic(Some(topic_data.name.clone().as_str()), None).await
                 .map_err(|e| {
                     log::error!("Failed to get topic info: {:?}", e);
                     ResponseError::UnknownTopicOrPartition
@@ -70,18 +71,60 @@ where
                 })?
                 .topic_id;
 
+
+            // lock index store
+            try_lock_with_retry(
+                index_store,
+                &topic_id.to_string(),
+                request_partition_data.index,
+                10, // TTL in seconds
+                5, // Wait for 5 seconds before giving up
+            ).await.map_err(|e| {
+                log::error!("Failed to lock index store: {:?}", e);
+                ResponseError::KafkaStorageError
+            })?;
+
+            let start_offset = index_store.read_offset(&topic_id.to_string(), request_partition_data.index).await
+                .map_err(|e| {
+                    log::error!("Failed to read offset: {:?}", e);
+                    ResponseError::KafkaStorageError
+                })?;
+
             match log_store
-                .write_batch(
+                .write_records(
                     &topic_id.to_string(),
                     request_partition_data.index,
+                    start_offset,
                     request_partition_data.records.as_ref(),
                 ).await
-            {
-                Ok(base_offset) => {
+            { 
+                Ok((current_offset, key )) => {
                     partition_produce_response.error_code = 0;
-                    partition_produce_response.base_offset = base_offset;
+                    partition_produce_response.base_offset = start_offset;
                     partition_produce_response.log_append_time_ms = 0;
                     partition_produce_response.log_start_offset = 0;
+
+                    // Update the index store with the new base offset and key
+                    index_store.set_index(
+                        &topic_id.to_string(),
+                        request_partition_data.index,
+                        current_offset,
+                        &key,
+                    ).await?;
+
+                    // update the offset in the index store
+                    index_store.write_offset(&topic_id.to_string(), request_partition_data.index, current_offset).await
+                        .map_err(|e| {
+                            log::error!("Failed to set offset in index store: {:?}", e);
+                            ResponseError::KafkaStorageError
+                        })?;
+
+                    // Unlock the index store after writing
+                    index_store.unlock_exclusive(&topic_id.to_string(), request_partition_data.index).await
+                        .map_err(|e| {
+                            log::error!("Failed to unlock index store: {:?}", e);
+                            ResponseError::KafkaStorageError
+                        })?;
                 }
                 Err(e) => {
                     log::error!("Failed to write records to file: {:?}", e);
@@ -89,6 +132,12 @@ where
                     partition_produce_response.base_offset = 0;
                     partition_produce_response.log_append_time_ms = 0;
                     partition_produce_response.log_start_offset = -1;
+                    // Unlock the index store even if writing fails
+                    index_store.unlock_exclusive(&topic_id.to_string(), request_partition_data.index).await
+                        .map_err(|e| {
+                            log::error!("Failed to unlock index store after error: {:?}", e);
+                            ResponseError::KafkaStorageError
+                        })?;
                 }
             }
 
@@ -116,4 +165,29 @@ where
     send_kafka_response(stream, header, &response).await?;
     log::debug!("Sent ProduceResponse");
     Ok(())
+}
+
+use tokio::time::{sleep, Duration, Instant};
+
+async fn try_lock_with_retry(
+    index_store: &IndexStoreImpl,
+    topic: &str,
+    partition: i32,
+    ttl_secs: i64,
+    wait_secs: u64,
+) -> anyhow::Result<()> {
+    let deadline = Instant::now() + Duration::from_secs(wait_secs);
+
+    loop {
+        match index_store.lock_exclusive(topic, partition, ttl_secs).await {
+            Ok(true) => return Ok(()), // lock acquired successfully
+            Ok(false) => {
+                if Instant::now() >= deadline {
+                    anyhow::bail!("Timed out waiting for lock");
+                }
+                sleep(Duration::from_millis(200)).await; // wait before retrying
+            }
+            Err(e) => return Err(e),
+        }
+    }
 }
