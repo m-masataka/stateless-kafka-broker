@@ -56,7 +56,7 @@ impl UnsendLogStore for FileLogStore {
         for key in keys {
             let key_path = PathBuf::from(&key);
             let data = match self.get_object(key_path.as_path()) {
-                Ok((data)) => data,
+                Ok(data) => data,
                 Err(e) => {
                     // If the object does not exist, we initialize it with an empty log
                     log::warn!("Log object not found. Initializing with empty log. Error: {:?}", e);

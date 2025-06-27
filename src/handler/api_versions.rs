@@ -9,7 +9,7 @@ use crate::common::response::send_kafka_response_insert_prefix;
 pub async fn handle_api_versions_request<W>(
     stream: &mut W,
     header: &RequestHeader,
-    request: &ApiVersionsRequest,
+    _request: &ApiVersionsRequest,
 ) -> Result<()>
 where
     W: AsyncWrite + Unpin + Send,
