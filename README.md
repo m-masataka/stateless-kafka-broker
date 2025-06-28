@@ -1,6 +1,6 @@
 # Stateless Kafka Broker
 
-A minimal, stateless-compatible Kafka broker implementation in Rust.
+A minimal, Stateless Kafka broker implementation in Rust.
 
 ## 🚀 Overview
 
@@ -8,17 +8,20 @@ A minimal, stateless-compatible Kafka broker implementation in Rust.
 
 - Stateless (no internal storage or metadata persistence)
 - Lightweight and easy to deploy
-- Implements essential Kafka protocol handling (e.g., `InitProducerId`, etc.)
+- Implements essential Kafka protocol handling (e.g., `ProduceRequest`, `FetchRequest`, etc.)
 - Designed for use in ephemeral or serverless environments
 
 This project is ideal for exploring how Kafka protocol works, building custom broker-side logic, or embedding minimal Kafka functionality in controlled environments.
 
 ## ✨ Features
 
-- Stateless by design: no Zookeeper or KRaft dependency
-- Basic request handling: currently supports `InitProducerIdRequest`
-- Extensible message handling framework
-- Written in pure async Rust using `tokio`
+- **Stateless by design**: No Zookeeper or KRaft dependency. All metadata and log data are delegated to pluggable backends.
+- **Pluggable storage backends**: Choose from file system, Redis, S3, or other custom implementations for Meta Store, Log Store, and Index Store.
+- **Lightweight and portable**: Minimal binary size, easy to deploy in serverless or ephemeral environments.
+- **Protocol compatibility**: Implements essential Kafka protocol handling (e.g., `ProduceRequest`, `FetchRequest`, etc.).
+- **Fully asynchronous**: Written in pure async Rust using `tokio` for high concurrency and performance.
+- **Flexible scaling**: Stateless design enables horizontal scaling without complex state coordination.
+- **Customizable broker logic**: Designed for experimentation and extending Kafka protocol behavior.
 
 ## 📦 Usage
 
