@@ -47,64 +47,45 @@ export AWS_REGION=ap-northeast-1
 
 The core idea behind `stateless-kafka-broker` is to provide a lightweight, pluggable Kafka-compatible broker, where state persistence and log storage are **externalized and modularized**.
 
-```
-   +-----------------------------+
-   |      Kafka Client          |
-   +-----------------------------+
-             │
-     Kafka Protocol (TCP)
-             │
-   +-----------------------------+
-   |  Stateless Kafka Broker     |
-   |-----------------------------|
-   |  - Request Handlers         |
-   |  - Protocol Parser          |
-   |  - Response Encoder         |
-   |                             |
-   |     +-------------------+   |
-   |     |    meta_store     |◄─────────────────────────────┐
-   |     |-------------------|   |                          |
-   |     |  - producer_id    |   |                          |
-   |     |  - txn_epoch      |   |       Backend Options:   |
-   |     +-------------------+   |     - File               |
-   |                             |     - SQLite / SQL       |
-   |     +-------------------+   |     - Redis              |
-   |     |    log_store      |◄─────────────────────────────┘
-   |     |-------------------|         (pluggable)         
-   |     |  - Produce Logs   |
-   |     |  - Fetch Logs     |
-   |     +-------------------+
-   +-----------------------------+
-```
+This diagram illustrates the overall architecture of the **stateless-kafka-broker** project. Clients such as Kafka and Flink connect to the **Serverless Kafka Broker** using the standard Kafka protocol. The broker itself does not maintain any internal state; instead, all metadata and log data are delegated to external storage systems.
 
+![Architecture Overview](docs/overview.png)
 
-### 🔧 Pluggable Backends
+### Pluggable Storage Design
 
-#### `meta_store`
-Handles assignment and tracking of:
-- `producer_id`
-- `producer_epoch`
-- transactional metadata (in the future)
+The broker is composed of three main components, each of which supports **pluggable** storage backends:
 
-**Backends (planned/pluggable):**
-- File-based JSON
-- SQLite
-- Redis (ephemeral + centralized)
+- **Metadata Store / Index Store**  
+  Stores topic metadata and index information.  
+  Available backend options: Redis, PostgreSQL, TiKV, Local FS, S3, and more.
 
-#### `log_store`
-Manages message data for `ProduceRequest` / `FetchRequest`.
+- **Log Store**  
+  Stores actual message logs.  
+  Available backend options: Local FS, S3, and more.
+
+This design provides the flexibility to select the most suitable storage backend depending on your workload and operational requirements. For example, you can use Redis for fast metadata access while persisting logs to S3 for cost-efficient durability, or use only a local filesystem for simpler deployments.
+
+### Flexible Scalability and Cost Optimization
+
+- A completely **stateless** design enables easy scale-out and scale-in.
+- You can swap storage backends to optimize performance and cost.
+- Hybrid configurations combining cloud and on-premise storage are also possible.
+
+---
+
+Feel free to adjust the backend combinations to best fit your architecture and operational needs!
 
 **Backends (planned/pluggable):**
 - Local file storage
 - Amazon S3 / GCS (object storage)
-- In-memory (for simulation)
+- Redis TiKV
 
 ---
 
 ## 🧱 Modularity Goals
 
 - No hard-coded state logic: everything is injectable
-- Component abstraction traits: `MetaStore`, `LogStore`
+- Component abstraction traits: `MetaStore`, `LogStore`, `IndexStore`
 - Easy to mock and test
 - Serverless/federated deployment ready
 
@@ -112,9 +93,9 @@ Manages message data for `ProduceRequest` / `FetchRequest`.
 
 ## 📌 Example Use Cases
 
-| Environment        | Meta Store   | Log Store  |
-|--------------------|--------------|------------|
-| Local dev          | File         | File       |
-| Stateless edge app | Redis        | S3         |
-| SQLite-backed PoC  | SQLite       | Local FS   |
+| Environment        | Meta Store   | Log Store  | Index Store |
+|--------------------|--------------|------------|-------------|
+| Local dev          | File         | File       | File        |
+| Cloud Native App   | Redis        | S3         | TiKV        |
+| Simple(performance is not Critical)          | S3           | S3         | S3          |
 
