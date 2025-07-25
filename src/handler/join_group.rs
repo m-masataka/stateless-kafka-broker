@@ -69,6 +69,7 @@ where
                 assignment: None,
             };
             store_group.members.push(member);
+            meta_store.save_consumer_group(&store_group).await?;
             convert_consumer_group_to_join_response(store_group, requester_id, 0)
         }
     } else {
@@ -105,7 +106,7 @@ pub fn convert_consumer_group_to_join_response(
     requester_id: String,
     error_code: i16,
 ) -> JoinGroupResponse {
-    // メンバー一覧を JoinGroupResponseMember に変換
+    // Convert the members of the ConsumerGroup into JoinGroupResponseMember
     let members: Vec<JoinGroupResponseMember> = cg
         .members
         .iter()
@@ -122,7 +123,6 @@ pub fn convert_consumer_group_to_join_response(
         })
         .collect();
 
-    // JoinGroupResponse を default から構築
     let mut response = JoinGroupResponse::default();
     response.throttle_time_ms = 0;
     response.error_code = error_code;
@@ -146,7 +146,7 @@ fn new_consumer_group(request: &JoinGroupRequest, member_id: String, leader_id: 
     let protocol_name: StrBytes = request.protocols.first()
         .map(|p| p.name.clone())
         .unwrap_or_else(|| "range".into());
-    // 🔍 protocol_name に対応する metadata を探す
+    // find metadata in protocols
     let metadata = request
         .protocols
         .iter()

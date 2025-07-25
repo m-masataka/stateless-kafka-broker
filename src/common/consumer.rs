@@ -76,16 +76,12 @@ impl ConsumerGroup {
 
     pub fn update_group_status(&mut self, heartbeat_timeout: u64) {
         // remove members that are pending or have not sent a heartbeat in a while
-        let mut leader_removed = false;
         self.members.retain(|m| {
             if m.is_pending {
                 return false;
             }
             if let Ok(duration) = SystemTime::now().duration_since(m.last_heartbeat) {
                 if duration.as_secs() >= heartbeat_timeout {
-                    if m.is_leader {
-                        leader_removed = true;
-                    }
                     return false; // remove member
                 } else {
                     return true;
@@ -93,8 +89,12 @@ impl ConsumerGroup {
             }
             false
         });
-        // If reader was removed, set status to rebalancing
-        if leader_removed {
+        // If there is no leader, set the first member as the leader
+        if !self.members.is_empty() {
+            self.leader_id.clear();
+            self.is_rebalancing = true;
+        }
+        if !self.members.iter().any(|m| m.is_leader) {
             self.is_rebalancing = true;
             self.leader_id.clear(); // Clear leader ID if the leader was removed
         }
