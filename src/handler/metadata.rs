@@ -67,7 +67,7 @@ where
                 .collect::<Vec<_>>()
         },
         Some(topics) => {
-            // 指定されたトピックのみ返す
+            // Received specific topics
             let mut response_topics = Vec::new();
             for request_topic in topics.iter() {
                 if let Some(name) = &request_topic.name {
@@ -117,7 +117,9 @@ pub fn to_metadata_response_topic(topic: &Topic, leader_id: i32) -> MetadataResp
             let mut partition_response = MetadataResponsePartition::default();
             partition_response.partition_index = i;
             partition_response.leader_id = BrokerId(leader_id);
-            partition_response.isr_nodes = vec![];
+            partition_response.replica_nodes = vec![BrokerId(leader_id)]; // TODO: Implement proper replica handling
+            partition_response.isr_nodes = vec![BrokerId(leader_id)]; // TODO: Implement proper ISR handling;
+            partition_response.leader_epoch = 0;
             partition_response.error_code = 0;
             partition_response
         })

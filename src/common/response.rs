@@ -51,7 +51,7 @@ pub fn is_flexible_version(api_key: i16, version: i16) -> bool {
         8 => version >= 7,   // OffsetCommit
         9 => version >= 8,   // OffsetFetch
         10 => version >= 3,  // FindCoordinator
-        11 => version >= 5,  // JoinGroup
+        11 => version >= 7,  // JoinGroup
         12 => version >= 4,  // Heartbeat
         13 => version >= 3,  // LeaveGroup
         14 => version >= 4,  // SyncGroup

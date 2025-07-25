@@ -45,7 +45,7 @@ where
         let requester_id = member_id.clone();
         if store_group.is_rebalancing {
             log::warn!("Consumer group {} is currently rebalancing, rejecting join request", *group_id);
-            let generation_id = store_group.generation_id + 1; // 初期のgeneration_id
+            let generation_id = store_group.generation_id + 1; // New generation ID
             let member_id_str = generate_member_id(&group_id);
             let requester_id = member_id_str.clone();
             let leader_id = member_id_str.clone();
@@ -58,7 +58,7 @@ where
                 0,
             )
         } else {
-            // 既存のグループが見つかった場合は、メンバー情報を更新
+            // If the group exists and is not rebalancing, update the member
             log::info!("Found existing consumer group: {}", *group_id.clone());
             let member = ConsumerGroupMember {
                 member_id: member_id,
@@ -72,7 +72,7 @@ where
             convert_consumer_group_to_join_response(store_group, requester_id, 0)
         }
     } else {
-        // グループが存在しない場合は新規作成
+        // if the group does not exist, create a new one
         log::info!("Consumer group not found, creating new group: {}", *group_id.clone());
         let member_id_str = generate_member_id(&group_id);
         let requester_id = member_id_str.clone();
@@ -89,7 +89,6 @@ where
 
     log::debug!("JoinGroupResponse: {:?}", response);
 
-    // レスポンスをエンコードして送信
     send_kafka_response(stream, header, &response).await?;
     log::debug!("Sent JoinGroupResponse");
     Ok(())

@@ -9,23 +9,22 @@ use crate::common::response::send_kafka_response_insert_prefix;
 pub async fn handle_api_versions_request<W>(
     stream: &mut W,
     header: &RequestHeader,
-    _request: &ApiVersionsRequest,
+    request: &ApiVersionsRequest,
 ) -> Result<()>
 where
     W: AsyncWrite + Unpin + Send,
 {
-    println!("ApiVersion");
+    log::info!("Handling ApiVersionRequest API VERSION {}", header.request_api_version);
+    log::debug!("ApiVersionRequest: {:?}", request);
     // Send ApiVersionsResponse
     let mut response = ApiVersionsResponse::default();
-    println!("response: api error {}, {:?}",
-        response.error_code,
-        response.api_keys);
     response.error_code = 0;
     response.throttle_time_ms = 0;
     response.api_keys = all_supported_api_versions();
 
     send_kafka_response_insert_prefix(stream, header, &response, false).await?;
-    println!("Sent ApiVersionsResponse and closed connection");
+    log::debug!("ApiVersionsResponse: {:?}", response);
+    log::info!("Sent ApiVersionsResponse with {} API versions", response.api_keys.len());
     Ok(())
 }
 
