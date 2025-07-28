@@ -1,6 +1,6 @@
 use crate::common::consumer::{
-    Partition,
-    Topics,
+    ConsumerGroupPartition,
+    ConsumerGroupTopic,
 };
 use crate::traits::meta_store::UnsendMetaStore;
 use crate::common::{
@@ -309,7 +309,7 @@ impl UnsendMetaStore for FileMetaStore {
                         );
                     }
                     None => {
-                        topic.partitions.push(Partition {
+                        topic.partitions.push(ConsumerGroupPartition {
                             partition_index: partition_index,
                             committed_offset: offset,
                             committed_leader_epoch: generation_id,
@@ -323,9 +323,9 @@ impl UnsendMetaStore for FileMetaStore {
                 }
             }
             None => {
-                topics.push(Topics {
+                topics.push(ConsumerGroupTopic {
                     name: topic_name.to_string(),
-                    partitions: vec![Partition {
+                    partitions: vec![ConsumerGroupPartition {
                         partition_index: partition_index,
                         committed_offset: offset,
                         committed_leader_epoch: generation_id,

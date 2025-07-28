@@ -30,9 +30,9 @@ where
     log::info!("Handling JoinGroupRequest API VERSION {}", header.request_api_version);
     log::debug!("JoinGroupRequest: {:?}", request);
 
-    // グループIDとメンバーIDを取得
+    // Get the consumer group from the meta store
     let group_id = request.group_id.clone();
-    // Heartbeatの更新とgroupの取得
+    // Update the heartbeat for the consumer group
     let mut consumer_group = meta_store.update_heartbeat(group_id.as_str()).await?;
     log::debug!("Consumer group after heartbeat check: {:?}", consumer_group);
 

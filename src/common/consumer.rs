@@ -13,13 +13,13 @@ pub struct ConsumerGroupMember {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Topics {
+pub struct ConsumerGroupTopic {
     pub name: String,
-    pub partitions: Vec<Partition>,
+    pub partitions: Vec<ConsumerGroupPartition>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct Partition {
+pub struct ConsumerGroupPartition {
     pub partition_index: i32,
     pub committed_offset: i64,
     pub committed_leader_epoch: i32,
@@ -33,7 +33,7 @@ pub struct ConsumerGroup {
     pub rebalance_in_progress: bool,
     pub leader_id: String,
     pub generation_id: i32,
-    pub topics: Option<Vec<Topics>>,
+    pub topics: Option<Vec<ConsumerGroupTopic>>,
     pub protocol_type: String,
     pub protocol_name: String,
     pub is_rebalancing: bool,
@@ -44,9 +44,20 @@ impl ConsumerGroup {
         &self,
         topic_name: &str,
         partition_index: i32,
-    ) -> Option<&Partition> {
+    ) -> Option<&ConsumerGroupPartition> {
+        if self.topics.is_none() {
+            log::warn!("❗ topics is None");
+        }
+        if let Some(topics) = &self.topics {
+            for topic in topics {
+                log::debug!("Topic: '{}'", topic.name);
+                for part in &topic.partitions {
+                    log::debug!("  Partition: {}, offset: {}", part.partition_index, part.committed_offset);
+                }
+            }
+        }
         self.topics
-            .as_ref()? // Option<Vec<Topics>> を Option<&Vec<Topics>> に
+            .as_ref()? 
             .iter()
             .find(|t| t.name == topic_name)
             .and_then(|t| t.partitions.iter().find(|p| p.partition_index == partition_index))
@@ -57,12 +68,43 @@ impl ConsumerGroup {
     }
 
     pub fn update_offset(&mut self, topic_name: &str, partition_index: i32, offset: i64) {
-        if let Some(topic) = self.topics.as_mut() {
-            if let Some(partition) = topic.iter_mut()
-                .find(|t| t.name == topic_name)
-                .and_then(|t| t.partitions.iter_mut().find(|p| p.partition_index == partition_index)) {
+        log::debug!(
+            "Updating offset for topic: {}, partition: {}, offset: {}",
+            topic_name, partition_index, offset
+        );
+        log::debug!("Current group state: {:?}", self);
+    
+        // Ensure `self.topics` is initialized
+        let topics = self.topics.get_or_insert(Vec::new());
+    
+        // Try to find the topic
+        let topic_entry = topics.iter_mut().find(|t| t.name == topic_name);
+    
+        if let Some(topic) = topic_entry {
+            // Topic found, try to find partition
+            if let Some(partition) = topic.partitions.iter_mut().find(|p| p.partition_index == partition_index) {
                 partition.committed_offset = offset;
+            } else {
+                // Partition not found, insert new
+                topic.partitions.push(ConsumerGroupPartition {
+                    partition_index,
+                    committed_offset: offset,
+                    committed_leader_epoch: 0, // Default value, adjust as needed
+                    metadata: None, // Optional, adjust as needed
+                });
             }
+        } else {
+            // Topic not found, insert new topic with the partition
+            topics.push(ConsumerGroupTopic {
+                name: topic_name.to_string(),
+                partitions: vec![ConsumerGroupPartition {
+                    partition_index,
+                    committed_offset: offset,
+                    committed_leader_epoch: 0, // Default value, adjust as needed
+                    metadata: None, // Optional, adjust as needed
+                }],
+
+            });
         }
     }
 
@@ -90,11 +132,13 @@ impl ConsumerGroup {
             false
         });
         // If there is no leader, set the first member as the leader
-        if !self.members.is_empty() {
+        if self.members.is_empty() {
+            log::debug!("No members left in the group, resetting group status");
             self.leader_id.clear();
             self.is_rebalancing = true;
         }
         if !self.members.iter().any(|m| m.is_leader) {
+            log::debug!("No leader found, setting the first member as the leader");
             self.is_rebalancing = true;
             self.leader_id.clear(); // Clear leader ID if the leader was removed
         }

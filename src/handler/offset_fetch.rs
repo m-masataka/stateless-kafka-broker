@@ -58,8 +58,8 @@ async fn build_response_group(
     group_response.group_id = group.group_id.clone();
 
     match meta_store.get_consumer_group(&group.group_id).await {
-        Ok(Some(store)) => {
-            log::info!("Found existing consumer group");
+        Ok(Some(consumer_group)) => {
+            log::debug!("Consumer group: {:?}", consumer_group);
 
             if let Some(topics) = &group.topics {
                 group_response.topics = topics.iter().map(|topic| {
@@ -69,8 +69,9 @@ async fn build_response_group(
                     topic_response.partitions = topic.partition_indexes.iter().map(|&index| {
                         let mut partition = OffsetFetchResponsePartitions::default();
                         partition.partition_index = index;
+                        log::debug!("Process topic: {}, partition: {}", topic.name.as_str(), index);
 
-                        if let Some(store_partition) = store.get_partition_by_topic_and_index(&topic.name, index) {
+                        if let Some(store_partition) = consumer_group.get_partition_by_topic_and_index(&topic.name, index) {
                             log::info!("Found partition: {} for topic: {}", index, topic.name.as_str());
                             partition.committed_offset = store_partition.committed_offset;
                             partition.metadata = Some(StrBytes::from_string(

@@ -25,7 +25,8 @@ where
     W: AsyncWrite + Unpin + Send,
 {
     log::info!("Handling OffsetCommitRequest API VERSION {}", header.request_api_version);
-    // groupを更新
+    log::debug!("OffsetCommitRequest: {:?}", request);
+    // update heartbeat for the consumer group
     match meta_store.update_heartbeat(request.group_id.as_str()).await {
         Ok(g) => g,
         Err(e) => {
@@ -62,12 +63,25 @@ where
                 },
             };
             partition_responses.push(partition_response);
+            // Check updated group
+            match meta_store.get_consumer_group(&request.group_id).await {
+                Ok(Some(consumer_group)) => {
+                    log::info!("Updated consumer group: {:?}", consumer_group);
+                },
+                Ok(None) => {
+                    log::warn!("Consumer group {} not found after commit", request.group_id.as_str());
+                },
+                Err(e) => {
+                    log::error!("Error fetching consumer group {}: {:?}", request.group_id.as_str(), e);
+                }
+            };
         }
+        topic_response.partitions = partition_responses;
         topic_responses.push(topic_response);
     }
     response.topics = topic_responses;
     response.throttle_time_ms = 0;
     send_kafka_response(stream, header, &response).await?;
-    log::debug!("OffsetCommitRequest: {:?}", request);
+    log::debug!("Sent OffsetCommitResponse: {:?}", response);
     Ok(())
 }

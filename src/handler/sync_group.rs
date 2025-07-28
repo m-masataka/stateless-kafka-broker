@@ -29,14 +29,14 @@ where
     log::info!("Handling SyncGroupRequest API VERSION {}", header.request_api_version);
     log::debug!("SyncGroupRequest: {:?}", request);
 
-    // グループIDとメンバーIDを取得
+    // get consumer group
     let group_id = request.group_id.clone();
     let consumer_group = meta_store.get_consumer_group(group_id.as_str()).await?;
+    log::debug!("Consumer group found: {:?}", consumer_group);
 
-    // TODO: Heartbeatの処理を追加する
+    // TODO: 
     let response = if let Some(consumer_group) = consumer_group {
         log::info!("Found existing consumer group: {}", *group_id.clone());
-        // group memberを更新
         let member = match consumer_group.get_member_by_id(&request.member_id) {
             Some(member) => {
                 log::info!("Found existing member: {}", request.member_id);
@@ -89,7 +89,6 @@ where
     };
 
 
-    // レスポンスをエンコードして送信
     log::debug!("SyncGroupResponse: {:?}", response);
     send_kafka_response(stream, header, &response).await?;
     log::debug!("Sent SyncGroupResponse");

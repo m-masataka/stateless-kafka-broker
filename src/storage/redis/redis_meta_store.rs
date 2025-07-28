@@ -146,19 +146,26 @@ impl UnsendMetaStore for RedisMetaStore {
     }
 
     async fn get_consumer_group(&self, group_id: &str) -> Result<Option<ConsumerGroup>> {
-        // Get the consumer group information from Redis
-        let mut conn = self.conn.lock().await;
+        // Get the consumer group by group ID
+        let conn = self.conn.clone();
         let key = format!("consumer_group:{}", group_id);
-        let maybe_value: Option<String>  = conn.get(&key).await?;
-        let value = match maybe_value {
-            Some(v) => v,
-            None => {
-                log::warn!("Consumer group not found for key: {}", key);
-                return Ok(None); // or your preferred fallback
-            }
-        };
-        let consumer_group: ConsumerGroup = serde_json::from_str(&value)?;
-        return Ok(Some(consumer_group));
+        let lock_key = format!("lock:consumer_group:{}", group_id);
+    
+        let result = self.with_redis_lock(conn, &lock_key, self.ttl_secs, move |conn| async move {
+            let mut conn = conn.lock().await;
+            let maybe_value: Option<String> = conn.get(&key).await?;
+            let value = match maybe_value {
+                Some(v) => v,
+                None => {
+                    log::warn!("Consumer group not found for key: {}", key);
+                    return Ok(None);
+                }
+            };
+            let consumer_group: ConsumerGroup = serde_json::from_str(&value)?;
+            Ok(Some(consumer_group))
+        }).await?;
+    
+        Ok(result)
     }
 
     async fn update_heartbeat(&self, group_id: &str) -> Result<Option<ConsumerGroup>> {
@@ -167,10 +174,18 @@ impl UnsendMetaStore for RedisMetaStore {
         let conn = self.conn.clone();
         let key = format!("consumer_group:{}", group_id);
         let lock_key = format!("lock:consumer_group:{}", group_id);
+        log::debug!("Updating heartbeat for consumer group: {}", group_id);
 
         let result = self.with_redis_lock(conn, &lock_key, self.ttl_secs, |conn| async move {
+            log::debug!("Acquiring lock for consumer group: {}", key);
             let mut conn = conn.lock().await;
-            let maybe_value: Option<String>  = conn.get(&key).await?;
+            let maybe_value: Option<String> = match conn.get(&key).await {
+                Ok(val) => val,
+                Err(e) => {
+                    log::error!("❌ Failed to get key {} from Redis: {}", key, e);
+                    return Err(anyhow::anyhow!("Redis GET error: {}", e));
+                }
+            };
             let value = match maybe_value {
                 Some(v) => v,
                 None => {
@@ -178,11 +193,19 @@ impl UnsendMetaStore for RedisMetaStore {
                     return Ok(None); // or your preferred fallback
                 }
             };
-            let mut consumer_group: ConsumerGroup = serde_json::from_str(&value)?;
+            let mut consumer_group: ConsumerGroup = match serde_json::from_str(&value) {
+                Ok(group) => group,
+                Err(e) => {
+                    log::error!("❌ Failed to deserialize ConsumerGroup: {}", e);
+                    return Err(anyhow::anyhow!("Deserialize error: {}", e));
+                }
+            };
+            log::debug!("Before Updated value for consumer group: {:?}", consumer_group);
             // Set an expiration time for the lock
             consumer_group.update_group_status(10); // Assuming 10 seconds as heartbeat timeout
             // Save the updated consumer group back to Redis
             let updated_value = serde_json::to_string(&consumer_group)?;
+            log::debug!("Updated value for consumer group: {}", updated_value);
             let _: () = conn.set(&key, &updated_value).await?;
             Ok(Some(consumer_group))
         }).await?;
@@ -193,7 +216,7 @@ impl UnsendMetaStore for RedisMetaStore {
         // get consumer group and update offset
         let conn = self.conn.clone();
         let key = format!("consumer_group:{}", group_id);
-        let lock_key = format!("lock:consumer_group:{}", group_id);
+        let lock_key: String = format!("lock:consumer_group:{}", group_id);
 
         let topic = topic.to_string();
         self.with_redis_lock(conn, &lock_key, self.ttl_secs, move |conn| async move {
@@ -257,12 +280,20 @@ impl UnsendMetaStore for RedisMetaStore {
         let member = member.clone();
         self.with_redis_lock(conn, &lock_key, self.ttl_secs, move |conn| async move {
             let mut conn = conn.lock().await;
-            let value: String = conn.get(&key).await?;
+            let maybe_value: Option<String> = conn.get(&key).await?;
+            let value = match maybe_value {
+                Some(v) => v,
+                None => {
+                    return Err(anyhow::anyhow!("Consumer group not found: {}", key));
+                }
+            };
             let mut consumer_group: ConsumerGroup = serde_json::from_str(&value)?;
+            log::debug!("Before updating member: {:?}", consumer_group);
             // Update or add the member
             consumer_group.upsert_member(member);
             // Save the updated consumer group back to Redis
             let updated_value = serde_json::to_string(&consumer_group)?;
+            log::debug!("Updated consumer group member: {:?}", updated_value);
             let _: () = conn.set(&key, &updated_value).await?;
             Ok(())
         }).await
@@ -296,22 +327,48 @@ impl RedisMetaStore {
         Fut: std::future::Future<Output = Result<T>> + Send,
         T: Send + 'static,
     {
-        {
+        const MAX_RETRIES: usize = 5;
+        const RETRY_DELAY_MS: u64 = 100;
+        use tokio::time::sleep;
+        use std::time::Duration;
+    
+        let mut acquired = false;
+    
+        for attempt in 0..MAX_RETRIES {
             let mut c = conn.lock().await;
-            let acquired: bool = c.set_nx(lock_key, "lock").await?;
-            if !acquired {
-                return Err(anyhow::anyhow!("Failed to acquire lock: {}", lock_key));
+            match c.set_nx(lock_key, "lock").await {
+                Ok(true) => {
+                    log::debug!("✅ Lock acquired: {} (attempt {})", lock_key, attempt + 1);
+                    let _: () = c.expire(lock_key, ttl_secs).await?;
+                    acquired = true;
+                    break;
+                }
+                Ok(false) => {
+                    log::debug!(
+                        "🔒 Lock busy (attempt {}/{}): {}. Retrying...",
+                        attempt + 1,
+                        MAX_RETRIES,
+                        lock_key
+                    );
+                }
+                Err(e) => {
+                    log::error!("❌ Redis error while acquiring lock {}: {}", lock_key, e);
+                    return Err(anyhow::anyhow!("Redis error while acquiring lock: {}", e));
+                }
             }
-            let _: () = c.expire(lock_key, ttl_secs).await?;
+            // drop(c); // Not necessary in async scope; will drop on scope exit
+            sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
         }
-
+    
+        if !acquired {
+            return Err(anyhow::anyhow!("Failed to acquire lock: {}", lock_key));
+        }
+    
         let result = f(conn.clone()).await;
-
-        {
-            let mut c = conn.lock().await;
-            let _: () = c.del(lock_key).await?; // Release the lock
-        }
-
+    
+        let mut c = conn.lock().await;
+        let _: () = c.del(lock_key).await?;
+    
         result
     }
 

@@ -118,7 +118,7 @@ where
     response.responses = topic_responses;
     
     send_kafka_response(stream, header, &response).await?;
-    log::debug!("Sent JoinGroupResponse");
+    log::debug!("Sent FetchResponse");
     log::debug!("FetchResponse: {:?}", response);
     Ok(())
 }
