@@ -1,5 +1,8 @@
 name: Integration Test
-on: [push]
+on:
+  pull_request:
+    branches:
+      - main
 
 jobs:
   test:
@@ -28,10 +31,6 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 5
-
-    container:
-      image: rust:1.77
-      options: --network host
 
     steps:
     - name: Install MinIO client (mc)
