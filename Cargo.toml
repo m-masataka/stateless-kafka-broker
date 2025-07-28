@@ -1,5 +1,5 @@
 [package]
-name = "serverless_kafka_broker"
+name = "stateless_kafka_broker"
 version = "0.1.0"
 edition = "2024"
 
