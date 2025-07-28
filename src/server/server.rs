@@ -59,10 +59,10 @@ use kafka_protocol::messages::{
 use kafka_protocol::protocol::Decodable;
 use redis::Client;
 
-pub async fn server_start() -> anyhow::Result<()> {
+pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
     env_logger::init();
     log::info!("Starting Kafka-compatible server...");
-    let cluster_conf_load = Arc::new(load_cluster_config("config/cluster.json")?);
+    let cluster_conf_load = Arc::new(load_cluster_config(config_path)?);
     let server_config = load_server_config()?;
 
 

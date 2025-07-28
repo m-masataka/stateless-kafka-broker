@@ -100,7 +100,7 @@ jobs:
         KAFKA_INDEX_STORE_TYPE: redis
         KAFKA_INDEX_STORE_REDIS_URL: redis://localhost:6379
       run: |
-        ./target/release/serverless_kafka_broker 2>&1 | tee rust-server.log &
+        ./target/release/serverless_kafka_broker --config config/cluster.sample.json 2>&1 | tee rust-server.log &
       working-directory: ${{ github.workspace }}
 
     - name: Wait for Rust server to be ready
