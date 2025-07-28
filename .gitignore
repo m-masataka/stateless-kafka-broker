@@ -18,5 +18,4 @@ Cargo.lock
 .vscode
 data
 local
-tests
 config/cluster.json
