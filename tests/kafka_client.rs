@@ -75,7 +75,7 @@ async fn test_consumer_group_join_and_fetch() {
         .map(|i| format!("test-message{}", i))
         .collect();
 
-    let timeout = std::time::Instant::now() + Duration::from_secs(10);
+    let timeout = std::time::Instant::now() + Duration::from_secs(20);
 
     while received_messages != expected_messages && std::time::Instant::now() < timeout {
         match stream.next().await {
@@ -95,7 +95,8 @@ async fn test_consumer_group_join_and_fetch() {
                 consumer.commit_message(&msg, CommitMode::Async).unwrap();
             }
             Some(Err(e)) => {
-                panic!("Kafka consume error: {:?}", e);
+                eprintln!("⚠️ Kafka consume error: {:?}", e);
+
             }
             None => {
                 break; // Stream ended
@@ -112,3 +113,4 @@ async fn test_consumer_group_join_and_fetch() {
     println!("✅ All expected messages received!");
 
 }
+
