@@ -116,3 +116,9 @@ jobs:
 
     - name: Run tests
       run: cargo test --test kafka_client
+      
+    - name: Show rust-server.log if test fails
+      if: failure()
+      run: |
+        echo "🔍 Dumping rust-server.log due to test failure..."
+        cat rust-server.log || echo "⚠️ rust-server.log not found"
