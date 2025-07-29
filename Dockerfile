@@ -18,7 +18,7 @@ FROM debian:bookworm-slim
 
 RUN apt-get update && apt-get install -y ca-certificates && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/target/release/serverless_kafka_broker /usr/local/bin/server
+COPY --from=builder /app/target/release/stateless_kafka_broker /usr/local/bin/server
 
 EXPOSE 8080
 WORKDIR /app

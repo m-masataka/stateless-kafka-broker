@@ -10,7 +10,7 @@ use kafka_protocol::messages::join_group_response::{
     JoinGroupResponseMember
 };
 
-use crate::common::consumer::{ConsumerGroup, ConsumerGroupMember};
+use crate::common::consumer::{ConsumerGroup, ConsumerGroupMember, ConsumerGroupTopic};
 use crate::common::response::send_kafka_response;
 use crate::storage::meta_store_impl::MetaStoreImpl;
 use crate::traits::meta_store::MetaStore;
@@ -46,10 +46,10 @@ where
         if store_group.is_rebalancing {
             log::warn!("Consumer group {} is currently rebalancing, rejecting join request", *group_id);
             let generation_id = store_group.generation_id + 1; // New generation ID
-            let member_id_str = generate_member_id(&group_id);
+            let member_id_str= generate_member_id(&group_id);
             let requester_id = member_id_str.clone();
             let leader_id = member_id_str.clone();
-            let cg = new_consumer_group(request, member_id_str, leader_id, &group_id, generation_id);
+            let cg = new_consumer_group(request, member_id_str, leader_id, &group_id, generation_id, store_group.topics.clone());
             meta_store.save_consumer_group(&cg).await?;
         
             convert_consumer_group_to_join_response(
@@ -78,7 +78,7 @@ where
         let member_id_str = generate_member_id(&group_id);
         let requester_id = member_id_str.clone();
         let leader_id = member_id_str.clone();
-        let cg = new_consumer_group(request, member_id_str, leader_id, &group_id, 1);
+        let cg = new_consumer_group(request, member_id_str, leader_id, &group_id, 1, None);
         meta_store.save_consumer_group(&cg).await?;
         
         convert_consumer_group_to_join_response(
@@ -138,7 +138,7 @@ pub fn convert_consumer_group_to_join_response(
     response
 }
 
-fn new_consumer_group(request: &JoinGroupRequest, member_id: String, leader_id: String, group_id: &StrBytes, generation_id: i32) -> ConsumerGroup {
+fn new_consumer_group(request: &JoinGroupRequest, member_id: String, leader_id: String, group_id: &StrBytes, generation_id: i32, topics: Option<Vec<ConsumerGroupTopic>>) -> ConsumerGroup {
     let generation_id = generation_id;
     let protocol_type: StrBytes = request.protocol_type.clone();
 
@@ -170,7 +170,7 @@ fn new_consumer_group(request: &JoinGroupRequest, member_id: String, leader_id: 
         members,
         rebalance_in_progress: false,
         generation_id,
-        topics: None,
+        topics: topics,
         protocol_type: protocol_type.to_string(),
         protocol_name: protocol_name.to_string(),
         leader_id: leader_id,

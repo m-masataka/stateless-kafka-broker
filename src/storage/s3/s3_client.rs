@@ -3,6 +3,7 @@ use aws_sdk_s3::{config::{Credentials, SharedCredentialsProvider}, primitives::B
 use bytes::Bytes;
 use anyhow::Result;
 
+#[derive(Clone)]
 pub struct S3Client {
     client: Client,
 }
@@ -35,6 +36,35 @@ impl S3Client {
             .to_string();
         let data = output.body.collect().await?.into_bytes();
         Ok((data, etag))
+    }
+
+    pub async fn list_objects(&self, bucket: &str, prefix: Option<&str>) -> Result<Vec<String>> {
+        let mut objects = Vec::new();
+        let mut continuation_token = None;
+
+        loop {
+            let mut request = self.client.list_objects_v2().bucket(bucket);
+            if let Some(prefix) = prefix {
+                request = request.prefix(prefix);
+            }
+            if let Some(token) = continuation_token {
+                request = request.continuation_token(token);
+            }
+
+            let response = request.send().await?;
+            for object in response.contents() {
+                if let Some(key) = object.key() {
+                    objects.push(key.to_string());
+                }
+            }
+
+            if response.is_truncated() == Some(false) || response.is_truncated().is_none() {
+                break;
+            }
+            continuation_token = response.next_continuation_token().map(|token| token.to_owned());
+        }
+
+        Ok(objects)
     }
 
     pub async fn put_object(&self, bucket: &str, key: &str, body: &Vec<u8>, etag: Option<String>) -> Result<()> {
@@ -75,5 +105,64 @@ impl S3Client {
                 Err(e.into())
             }
         }
+    }
+
+    pub async fn delete_object(&self, bucket: &str, key: &str) -> Result<()> {
+        log::debug!("Deleting object from S3: {}", key);
+        self.client
+            .delete_object()
+            .bucket(bucket)
+            .key(key)
+            .send()
+            .await
+            .map_err(|e| {
+                log::error!("Failed to delete object from S3: {:?}", e);
+                anyhow::anyhow!("Failed to delete object from S3: {:?}", e)
+            })?;
+        log::debug!("Successfully deleted object from S3: {}", key);
+        Ok(())
+    }
+
+    pub async fn acquire_lock(&self, bucket: &str, key: &str) -> Result<()> {
+        log::debug!("Acquiring lock for key: {}", key);
+        let response = self.client
+            .put_object()
+            .bucket(bucket)
+            .key(key)
+            .if_none_match("*")
+            .body(ByteStream::from("lock".as_bytes().to_vec()))
+            .send()
+            .await;
+
+        match response {
+            Ok(_) => {
+                log::debug!("Lock acquired successfully for key: {}", key);
+                Ok(())
+            }
+            Err(e) if e.to_string().contains("PreconditionFailed") => {
+                log::warn!("Lock already exists for key: {}, retrying...", key);
+                Err(anyhow::anyhow!("Lock already exists"))
+            }
+            Err(e) => {
+                log::error!("Failed to acquire lock for key: {}: {:?}", key, e);
+                Err(e.into())
+            }
+        }
+    }
+
+    pub async fn release_lock(&self, bucket: &str, key: &str) -> Result<()> {
+        log::debug!("Releasing lock for key: {}", key);
+        self.client
+            .delete_object()
+            .bucket(bucket)
+            .key(key)
+            .send()
+            .await
+            .map_err(|e| {
+                log::error!("Failed to release lock for key: {}: {:?}", key, e);
+                anyhow::anyhow!("Failed to release lock for key: {}: {:?}", key, e)
+            })?;
+        log::debug!("Lock released successfully for key: {}", key);
+        Ok(())
     }
 }

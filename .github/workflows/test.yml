@@ -1,0 +1,124 @@
+name: Integration Test
+on:
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+  
+      minio:
+        image: bitnami/minio:latest
+        env:
+          MINIO_ROOT_USER: minioadmin
+          MINIO_ROOT_PASSWORD: minioadmin
+        ports:
+          - 9000:9000
+          - 9001:9001
+        options: >-
+          --health-cmd "curl -f http://localhost:9000/minio/health/live"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 5
+
+    steps:
+    - name: Install MinIO client (mc)
+      run: |
+        curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o mc
+        chmod +x mc
+        sudo mv mc /usr/local/bin/
+
+    - name: Wait for MinIO and create bucket
+      run: |
+        echo "Waiting for MinIO to be ready..."
+        for i in {1..10}; do
+          if curl -fs http://127.0.0.1:9000/minio/health/ready > /dev/null; then
+            echo "MinIO is ready!"
+            break
+          fi
+          echo "Waiting for MinIO... (${i})"
+          sleep 2
+        done
+
+        echo "Setting mc alias and creating bucket"
+        mc alias set local http://127.0.0.1:9000 minioadmin minioadmin
+        mc mb local/mybucket || true
+
+    - name: Checkout
+      uses: actions/checkout@v4
+      
+    - name: Install Rust (rustup)
+      run: |
+        curl https://sh.rustup.rs -sSf | sh -s -- -y --no-modify-path
+        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+    - name: Cache cargo registry
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Build broker
+      run: cargo build --release
+
+    - name: Confirm broker binary exists
+      run: |
+        ls -alh ./target/release/
+        test -x ./target/release/stateless_kafka_broker || (echo "❌ Binary not found!" && exit 1)
+      working-directory: ${{ github.workspace }}
+
+
+    - name: Run Rust server in background
+      env:
+        RUST_LOG: debug
+        KAFKA_HOST: 0.0.0.0
+        KAFKA_PORT: 9092
+        KAFKA_LOG_STORE_TYPE: s3
+        KAFKA_LOG_STORE_S3_BUCKET: mybucket
+        KAFKA_LOG_STORE_S3_PREFIX: logs
+        KAFKA_LOG_STORE_S3_ENDPOINT: http://localhost:9000
+        KAFKA_LOG_STORE_S3_ACCESS_KEY: minioadmin
+        KAFKA_LOG_STORE_S3_SECRET_KEY: minioadmin
+        KAFKA_META_STORE_TYPE: redis
+        KAFKA_META_STORE_REDIS_URL: redis://localhost:6379
+        KAFKA_INDEX_STORE_TYPE: redis
+        KAFKA_INDEX_STORE_REDIS_URL: redis://localhost:6379
+      run: |
+        ./target/release/stateless_kafka_broker --config config/cluster.sample.json 2>&1 | tee rust-server.log &
+      working-directory: ${{ github.workspace }}
+
+    - name: Wait for Rust server to be ready
+      run: |
+        for i in {1..10}; do
+          echo "Waiting for rust-server on port 9092..."
+          nc -z localhost 9092 && echo "Ready!" && exit 0
+          sleep 2
+        done
+        echo "❌ rust-server did not start in time"
+        cat rust-server.log
+        exit 1
+
+    - name: Run tests
+      run: cargo test --test kafka_client
+      
+    - name: Show rust-server.log if test fails
+      if: failure()
+      run: |
+        echo "🔍 Dumping rust-server.log due to test failure..."
+        cat rust-server.log || echo "⚠️ rust-server.log not found"
