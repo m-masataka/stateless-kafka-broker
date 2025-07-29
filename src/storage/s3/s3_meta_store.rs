@@ -9,8 +9,6 @@ pub struct S3MetaStore {
     s3_client: S3Client,
     bucket: String,
     prefix: Option<String>,
-    topic_metadata_file_name: String,
-    offset_file_name: String,
 }
 use anyhow::Result;
 use tokio::time::sleep;
@@ -21,8 +19,6 @@ impl S3MetaStore {
             s3_client: s3_client,
             bucket,
             prefix,
-            topic_metadata_file_name: "metadata.json".to_string(),
-            offset_file_name: "offset.txt".to_string(),
         }
     }
 }
@@ -287,7 +283,7 @@ impl S3MetaStore {
     fn metadata_key(&self, key :String) -> String {
         match &self.prefix {
             Some(prefix) => format!("{}/{}", prefix, key),
-            None => format!("{}", self.topic_metadata_file_name),
+            None => format!("{}", key),
         }
     }
 
