@@ -5,7 +5,7 @@ on:
 
 permissions:
   contents: write
-  
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -13,20 +13,23 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      - uses: actions-rs/toolchain@v1
+      - name: Install Rust and musl target
+        uses: actions-rs/toolchain@v1
         with:
           toolchain: stable
+          target: x86_64-unknown-linux-musl
           override: true
 
-      - run: cargo build --release
+      - name: Build statically-linked binary with musl
+        run: cargo build --release --target x86_64-unknown-linux-musl
 
-      - name: Create GitHub Release
+      - name: Upload stateless_kafka_broker to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: target/release/stateless_kafka_broker
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
+          files: target/x86_64-unknown-linux-musl/release/stateless_kafka_broker
+          tag_name: ${{ github.ref_name }}
+          release_name: Release ${{ github.ref_name }}
           body: |
-            Release of Stateless Kafka Broker version ${{ github.ref }}
+            Release of Stateless Kafka Broker version ${{ github.ref_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
