@@ -13,13 +13,7 @@ jobs:
         ports:
           - 6379:6379
         options: >-
-          --cluster-enabled yes
-          --port 7001
-          --cluster-config-file nodes.conf
-          --cluster-node-timeout 5000
-          --appendonly no
-          --bind 0.0.0.0
-          --health-cmd "redis-cli -p 7001 ping"
+          --health-cmd "redis-cli -p ping"
           --health-interval 5s
           --health-timeout 5s
           --health-retries 5
@@ -41,7 +35,7 @@ jobs:
     steps:
     - name: Init Single-Node Redis Cluster
       run: |
-        echo "yes" | redis-cli --cluster create 127.0.0.1:7001 --cluster-replicas 0
+        echo "yes" | redis-cli --cluster create 127.0.0.1:6379 --cluster-replicas 0
 
     - name: Install MinIO client (mc)
       run: |
@@ -106,9 +100,9 @@ jobs:
         KAFKA_LOG_STORE_S3_ACCESS_KEY: minioadmin
         KAFKA_LOG_STORE_S3_SECRET_KEY: minioadmin
         KAFKA_META_STORE_TYPE: redis
-        KAFKA_META_STORE_REDIS_URLS: redis://localhost:7001
+        KAFKA_META_STORE_REDIS_URLS: redis://localhost:6379
         KAFKA_INDEX_STORE_TYPE: redis
-        KAFKA_INDEX_STORE_REDIS_URLS: redis://localhost:7001
+        KAFKA_INDEX_STORE_REDIS_URLS: redis://localhost:6379
       run: |
         ./target/release/stateless_kafka_broker --config config/cluster.sample.json 2>&1 | tee rust-server.log &
       working-directory: ${{ github.workspace }}
