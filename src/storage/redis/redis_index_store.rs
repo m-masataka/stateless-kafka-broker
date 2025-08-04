@@ -1,13 +1,14 @@
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use crate::traits::index_store::UnsendIndexStore;
-use redis::{aio::MultiplexedConnection, AsyncCommands};
+use redis::AsyncCommands;
+use redis::cluster_async::ClusterConnection;
 pub struct RedisIndexStore {
-    conn: Arc<Mutex<MultiplexedConnection>>,
+    conn: Arc<Mutex<ClusterConnection>>,
 }
 
 impl RedisIndexStore {
-    pub fn new(conn: Arc<Mutex<MultiplexedConnection>>) -> Self {
+    pub fn new(conn: Arc<Mutex<ClusterConnection>>) -> Self {
         Self {
             conn,
         }

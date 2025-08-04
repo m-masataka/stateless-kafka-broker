@@ -57,7 +57,10 @@ use kafka_protocol::messages::{
     consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
 };
 use kafka_protocol::protocol::Decodable;
-use redis::Client;
+use redis::{
+    cluster_async::ClusterConnection,
+    cluster::ClusterClient
+};
 
 pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
     env_logger::init();
@@ -86,9 +89,13 @@ pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
         },
         StorageType::Redis => {
             log::info!("Using Redis meta store");
-            let url = server_config.index_store_redis_url.clone().ok_or_else(|| anyhow::anyhow!("Redis URL not configured"))?;
-            let client = Client::open(url)?;
-            let conn = client.get_multiplexed_async_connection().await?;
+            let redis_urls = server_config.meta_store_redis_urls
+                .unwrap_or_default()
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect::<Vec<String>>();
+            let client = ClusterClient::new(redis_urls)?;
+            let conn = client.get_async_connection().await?;
             Arc::new(MetaStoreImpl::Redis(RedisMetaStore::new(Arc::new(Mutex::new(conn)))))
         }
     };
@@ -117,9 +124,13 @@ pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
     let index_store_load = match &server_config.index_store_type {
         StorageType::Redis => {
             log::info!("Using Redis index store");
-            let url = server_config.index_store_redis_url.clone().ok_or_else(|| anyhow::anyhow!("Redis URL not configured"))?;
-            let client = Client::open(url)?;
-            let conn = client.get_multiplexed_async_connection().await?;
+            let redis_urls = server_config.index_store_redis_urls
+                .unwrap_or_default()
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect::<Vec<String>>();
+            let client = ClusterClient::new(redis_urls)?;
+            let conn = client.get_async_connection().await?;
             Arc::new(IndexStoreImpl::Redis(RedisIndexStore::new(Arc::new(Mutex::new(conn)))))
         },
         _ => {

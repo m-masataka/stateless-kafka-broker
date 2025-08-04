@@ -52,9 +52,10 @@ pub struct ServerConfig {
     pub meta_store_s3_access_key: Option<String>,
     pub meta_store_s3_secret_key: Option<String>,
     pub meta_store_s3_region: Option<String>,
+    pub meta_store_redis_urls: Option<String>, // "redis://redis-1:7001,redis://redis-2:7002"
 
     pub index_store_type: StorageType, // "file", "s3", "redis"
-    pub index_store_redis_url: Option<String>,
+    pub index_store_redis_urls: Option<String>, // "redis://redis-1:7001,redis://redis-2:7002"
 }
 
 pub fn load_server_config() -> Result<ServerConfig> {

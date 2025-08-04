@@ -2,17 +2,18 @@ use crate::traits::meta_store::UnsendMetaStore;
 use crate::common::topic_partition::Topic;
 use crate::common::consumer::{ConsumerGroup, ConsumerGroupMember};
 use anyhow::Result;
-use redis::{aio::MultiplexedConnection, AsyncCommands};
+use redis::AsyncCommands;
+use redis::cluster_async::ClusterConnection;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
 pub struct RedisMetaStore {
-    conn: Arc<Mutex<MultiplexedConnection>>,
+    conn: Arc<Mutex<ClusterConnection>>,
     ttl_secs: i64,
 }
 
 impl RedisMetaStore {
-    pub fn new(conn: Arc<Mutex<MultiplexedConnection>>) -> Self {
+    pub fn new(conn: Arc<Mutex<ClusterConnection>>) -> Self {
         Self {
             conn,
             ttl_secs: 10,
@@ -170,7 +171,6 @@ impl UnsendMetaStore for RedisMetaStore {
 
     async fn update_heartbeat(&self, group_id: &str) -> Result<Option<ConsumerGroup>> {
         // update the heartbeart for the consumer group
-        // let mut conn = self.get_conn().await?;
         let conn = self.conn.clone();
         let key = format!("consumer_group:{}", group_id);
         let lock_key = format!("lock:consumer_group:{}", group_id);
@@ -317,13 +317,13 @@ impl UnsendMetaStore for RedisMetaStore {
 impl RedisMetaStore {
     pub async fn with_redis_lock<F, Fut, T>(
         &self,
-        conn: Arc<Mutex<MultiplexedConnection>>,
+        conn: Arc<Mutex<ClusterConnection>>,
         lock_key: &str,
         ttl_secs: i64,
         f: F,
     ) -> Result<T>
     where
-        F: FnOnce(Arc<Mutex<MultiplexedConnection>>) -> Fut + Send + 'static,
+        F: FnOnce(Arc<Mutex<ClusterConnection>>) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = Result<T>> + Send,
         T: Send + 'static,
     {
@@ -374,7 +374,7 @@ impl RedisMetaStore {
 
     async fn get_topic_id_by_name(
         &self,
-        conn: &mut MultiplexedConnection,
+        conn: &mut ClusterConnection,
         name: &str,
     ) -> Result<Option<String>> {
         let index_key = format!("topic_index:name:{}", name);
