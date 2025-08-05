@@ -11,7 +11,7 @@ services:
     volumes:
       - ./config/cluster.json:/app/config/cluster.json
     depends_on:
-      - redis
+      - redis-node-1
       - minio
     environment:
       RUST_LOG: debug
@@ -24,15 +24,45 @@ services:
       KAFKA_LOG_STORE_S3_ACCESS_KEY: minioadmin
       KAFKA_LOG_STORE_S3_SECRET_KEY: minioadmin
       KAFKA_META_STORE_TYPE: redis
-      KAFKA_META_STORE_REDIS_URL: redis://redis:6379
+      KAFKA_META_STORE_REDIS_URLS: redis://redis-node-1:7001,redis://redis-node-2:7002,redis://redis-node-3:7003
       KAFKA_INDEX_STORE_TYPE: redis
-      KAFKA_INDEX_STORE_REDIS_URL: redis://redis:6379
+      KAFKA_INDEX_STORE_REDIS_URLS: redis://redis-node-1:7001,redis://redis-node-2:7002,redis://redis-node-3:7003
 
-  redis:
+  redis-node-1:
     image: redis:7
-    container_name: redis
+    container_name: redis-node-1
+    command: ["redis-server", "--port", "7001", "--cluster-enabled", "yes", "--cluster-config-file", "nodes.conf", "--cluster-node-timeout", "5000", "--appendonly", "yes"]
     ports:
-      - "6379:6379"
+      - "7001:7001"
+    volumes:
+      - redis-data-1:/data
+
+  redis-node-2:
+    image: redis:7
+    container_name: redis-node-2
+    command: ["redis-server", "--port", "7002", "--cluster-enabled", "yes", "--cluster-config-file", "nodes.conf", "--cluster-node-timeout", "5000", "--appendonly", "yes"]
+    ports:
+      - "7002:7002"
+    volumes:
+      - redis-data-2:/data
+
+  redis-node-3:
+    image: redis:7
+    container_name: redis-node-3
+    command: ["redis-server", "--port", "7003", "--cluster-enabled", "yes", "--cluster-config-file", "nodes.conf", "--cluster-node-timeout", "5000", "--appendonly", "yes"]
+    ports:
+      - "7003:7003"
+    volumes:
+      - redis-data-3:/data
+
+  redis-cluster-init:
+    image: redis:7
+    depends_on:
+      - redis-node-1
+      - redis-node-2
+      - redis-node-3
+    entrypoint: >
+      sh -c "sleep 10 && echo yes | redis-cli --cluster create redis-node-1:7001 redis-node-2:7002 redis-node-3:7003 --cluster-replicas 0"
 
   minio:
     image: minio/minio:latest
@@ -59,3 +89,6 @@ services:
       "
 volumes:
   minio-data:
+  redis-data-1:
+  redis-data-2:
+  redis-data-3:

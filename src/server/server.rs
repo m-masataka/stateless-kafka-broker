@@ -9,6 +9,7 @@ use crate::storage::{
     meta_store_impl::MetaStoreImpl,
     s3::s3_meta_store::S3MetaStore,
     redis::redis_meta_store::RedisMetaStore,
+    redis::redis_client::RedisClient,
 };
 
 use crate::handler::{
@@ -57,7 +58,7 @@ use kafka_protocol::messages::{
     consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
 };
 use kafka_protocol::protocol::Decodable;
-use redis::Client;
+use redis::cluster::ClusterClient;
 
 pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
     env_logger::init();
@@ -86,10 +87,23 @@ pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
         },
         StorageType::Redis => {
             log::info!("Using Redis meta store");
-            let url = server_config.index_store_redis_url.clone().ok_or_else(|| anyhow::anyhow!("Redis URL not configured"))?;
-            let client = Client::open(url)?;
-            let conn = client.get_multiplexed_async_connection().await?;
-            Arc::new(MetaStoreImpl::Redis(RedisMetaStore::new(Arc::new(Mutex::new(conn)))))
+            let redis_urls = server_config.meta_store_redis_urls
+                .unwrap_or_default()
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect::<Vec<String>>();
+            let redis_client: RedisClient = if redis_urls.len() > 1 {
+                log::info!("Using Redis Cluster with URLs: {:?}", redis_urls);
+                let client = ClusterClient::new(redis_urls)?;
+                let conn = client.get_async_connection().await?;
+                RedisClient::new(true, Some(Arc::new(Mutex::new(conn))), None)
+            } else {
+                log::info!("Using single Redis instance at: {}", redis_urls[0]);
+                let client = redis::Client::open(redis_urls[0].clone())?;
+                let conn = client.get_multiplexed_async_connection().await?;
+                RedisClient::new(false, None, Some(Arc::new(Mutex::new(conn))))
+            };
+            Arc::new(MetaStoreImpl::Redis(RedisMetaStore::new(redis_client)))
         }
     };
 
@@ -117,10 +131,23 @@ pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
     let index_store_load = match &server_config.index_store_type {
         StorageType::Redis => {
             log::info!("Using Redis index store");
-            let url = server_config.index_store_redis_url.clone().ok_or_else(|| anyhow::anyhow!("Redis URL not configured"))?;
-            let client = Client::open(url)?;
-            let conn = client.get_multiplexed_async_connection().await?;
-            Arc::new(IndexStoreImpl::Redis(RedisIndexStore::new(Arc::new(Mutex::new(conn)))))
+            let redis_urls = server_config.index_store_redis_urls
+                .unwrap_or_default()
+                .split(',')
+                .map(|s| s.trim().to_string())
+                .collect::<Vec<String>>();
+            let redis_client: RedisClient = if redis_urls.len() > 1 {
+                log::info!("Using Redis Cluster with URLs: {:?}", redis_urls);
+                let client = ClusterClient::new(redis_urls)?;
+                let conn = client.get_async_connection().await?;
+                RedisClient::new(true, Some(Arc::new(Mutex::new(conn))), None)
+            } else {
+                log::info!("Using single Redis instance at: {}", redis_urls[0]);
+                let client = redis::Client::open(redis_urls[0].clone())?;
+                let conn = client.get_multiplexed_async_connection().await?;
+                RedisClient::new(false, None, Some(Arc::new(Mutex::new(conn))))
+            };
+            Arc::new(IndexStoreImpl::Redis(RedisIndexStore::new(redis_client)))
         },
         _ => {
             return Err(anyhow::anyhow!("Unsupported index store backend"));

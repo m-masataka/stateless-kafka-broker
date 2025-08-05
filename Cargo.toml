@@ -30,7 +30,7 @@ chrono = { version = "0.4", features = ["clock"] }
 aws-config = "1"
 aws-sdk-s3 = "1.94.0"
 
-redis = { version = "0.32.2", features = ["tokio-comp"] }
+redis = { version = "0.32.2", features = ["tokio-comp", "cluster-async", "json"] }
 trait-variant = "0.1"
 async-trait = "0.1"
 mockall = "0.13.1"

@@ -1,15 +1,14 @@
-use std::sync::Arc;
-use tokio::sync::Mutex;
 use crate::traits::index_store::UnsendIndexStore;
-use redis::{aio::MultiplexedConnection, AsyncCommands};
+use crate::storage::redis::redis_client::RedisClient;
+
 pub struct RedisIndexStore {
-    conn: Arc<Mutex<MultiplexedConnection>>,
+    client: RedisClient,
 }
 
 impl RedisIndexStore {
-    pub fn new(conn: Arc<Mutex<MultiplexedConnection>>) -> Self {
+    pub fn new(client: RedisClient) -> Self {
         Self {
-            conn,
+            client,
         }
     }
 }
@@ -21,9 +20,8 @@ impl UnsendIndexStore for RedisIndexStore {
         partition: i32,
         offset: i64,
     ) -> anyhow::Result<()> {
-        let mut conn = self.conn.lock().await;
         let key = format!("offset:{}:{}", topic, partition);
-        let _: () = conn.set(&key, offset).await?;
+        self.client.set(&key, offset).await?;
         Ok(())
     }
 
@@ -32,9 +30,8 @@ impl UnsendIndexStore for RedisIndexStore {
         topic: &str,
         partition: i32,
     ) -> anyhow::Result<i64> {
-        let mut conn = self.conn.lock().await;
         let key = format!("offset:{}:{}", topic, partition);
-        let offset: Option<i64> = conn.get(&key).await?;
+        let offset: Option<i64> = self.client.get(&key).await?;
         match offset {
             Some(value) => Ok(value),
             None => Ok(-1), // Return -1 if no offset is found
@@ -47,19 +44,10 @@ impl UnsendIndexStore for RedisIndexStore {
         partition: i32,
         timeout_secs: i64,
     ) -> anyhow::Result<bool> {
-        let mut conn = self.conn.lock().await;
+        // let mut conn = self.conn.lock().await;
         let key = format!("lock:{}:{}", topic, partition);
         let value = uuid::Uuid::new_v4().to_string(); // unique token for reentrant safety if needed
-    
-        let result: bool = conn
-            .set_nx(&key, &value)
-            .await?;
-    
-        if result {
-            // Set expiration to avoid deadlock
-            let _: () = conn.expire(&key, timeout_secs).await?;
-        }
-    
+        let result = self.client.lock_exclusive(&key, &value, timeout_secs).await?;
         Ok(result)
     }
 
@@ -68,9 +56,8 @@ impl UnsendIndexStore for RedisIndexStore {
         topic: &str,
         partition: i32,
     ) -> anyhow::Result<()> {
-        let mut conn = self.conn.lock().await;
         let key = format!("lock:{}:{}", topic, partition);
-        let _: () = conn.del(&key).await?;
+        let _: () = self.client.unlock_exclusive(&key).await?;
         Ok(())
     }
 
@@ -82,9 +69,8 @@ impl UnsendIndexStore for RedisIndexStore {
         start_offset: i64,
         data_path: &str,
     ) -> anyhow::Result<()> {
-        let mut conn = self.conn.lock().await;
         let key = format!("index:{}:{}", topic, partition);
-        let _: () = conn.zadd(key, data_path, start_offset).await?;
+        let _: () = self.client.zadd(&key, data_path, start_offset).await?;
         Ok(())
     }
 
@@ -94,14 +80,10 @@ impl UnsendIndexStore for RedisIndexStore {
         partition: i32,
         start_offset: i64,
     ) -> anyhow::Result<Vec<String>> {
-        let mut conn = self.conn.lock().await;
         let key = format!("index:{}:{}", topic, partition);
-        let results: Vec<String> = conn
-            .zrangebyscore(key, start_offset, i64::MAX)
+        let results: Vec<String> = self.client
+            .zrangebyscore(&key, start_offset, i64::MAX)
             .await?;
         Ok(results)
     }
-}
-
-impl RedisIndexStore {
 }

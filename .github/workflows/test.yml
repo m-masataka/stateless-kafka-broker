@@ -96,9 +96,9 @@ jobs:
         KAFKA_LOG_STORE_S3_ACCESS_KEY: minioadmin
         KAFKA_LOG_STORE_S3_SECRET_KEY: minioadmin
         KAFKA_META_STORE_TYPE: redis
-        KAFKA_META_STORE_REDIS_URL: redis://localhost:6379
+        KAFKA_META_STORE_REDIS_URLS: redis://localhost:6379
         KAFKA_INDEX_STORE_TYPE: redis
-        KAFKA_INDEX_STORE_REDIS_URL: redis://localhost:6379
+        KAFKA_INDEX_STORE_REDIS_URLS: redis://localhost:6379
       run: |
         ./target/release/stateless_kafka_broker --config config/cluster.sample.json 2>&1 | tee rust-server.log &
       working-directory: ${{ github.workspace }}
