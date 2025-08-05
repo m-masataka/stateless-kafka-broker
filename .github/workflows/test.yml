@@ -33,15 +33,6 @@ jobs:
           --health-retries 5
 
     steps:
-    - name: Install redis-cli
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y redis-tools
-
-    - name: Init Single-Node Redis Cluster
-      run: |
-        echo "yes" | redis-cli --cluster create 127.0.0.1:6379 --cluster-replicas 0
-
     - name: Install MinIO client (mc)
       run: |
         curl -sSL https://dl.min.io/client/mc/release/linux-amd64/mc -o mc
