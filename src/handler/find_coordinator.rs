@@ -32,8 +32,8 @@ where
             let mut coordinator = Coordinator::default();
             coordinator.key = key.clone();
             coordinator.node_id = BrokerId(cluster_config.node_id);
-            coordinator.host = cluster_config.host.clone().into();
-            coordinator.port = cluster_config.port;
+            coordinator.host = cluster_config.advertised_host.clone().into();
+            coordinator.port = cluster_config.advertised_port;
             coordinator.error_code = 0;
             coordinators.push(coordinator);
         }
@@ -41,8 +41,8 @@ where
         send_kafka_response(stream, header, &response).await?;
     } else {
         response.node_id = BrokerId(cluster_config.node_id);
-        response.host = cluster_config.host.clone().into();
-        response.port = cluster_config.port;
+        response.host = cluster_config.advertised_host.clone().into();
+        response.port = cluster_config.advertised_port;
         response.error_code = 0;
         send_kafka_response_insert_prefix(stream, header, &response, false).await?;
     }

@@ -18,6 +18,8 @@ pub struct ClusterConfig {
     pub node_id: i32,
     pub host: String,
     pub port: i32,
+    pub advertised_host: String,
+    pub advertised_port: i32,
     pub brokers: Vec<BrokerConfig>,
 }
 
