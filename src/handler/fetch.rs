@@ -49,9 +49,14 @@ where
                         Ok(current_offset) => {
                             match index_store.get_index_from_start_offset(&topic_id.to_string(), partition.partition, partition.fetch_offset).await {
                                 Ok(keys) => {
-                                    match log_store.read_records(keys).await {
+                                    log::debug!("Read index for topic {:?} partition {}, key.len() {}", topic_id, partition.partition, keys.len());
+                                    let mut read_keys = keys.clone();
+                                    if read_keys.len() > 50 {
+                                        read_keys = read_keys[0..50].to_vec(); // Limit to 10 keys for performance
+                                    }
+                                    match log_store.read_records(read_keys).await {
                                         Ok(records) => {
-                                            log::debug!("Read records for topic {:?} partition {}: {:?}", topic_id, partition.partition, records);
+                                            log::info!("Read records for topic {:?} partition {}: record size {:?}", topic_id, partition.partition, records.len());
                                             partition_response.error_code = 0;
                                             partition_response.records = Some(records);
                                             partition_response.high_watermark = current_offset + 1;
@@ -117,7 +122,6 @@ where
         topic_responses.push(topic_response);
     }
     response.responses = topic_responses;
-    log::debug!("Ready to send FetchResponse: {:?}", response);
     send_kafka_response(stream, header, &response).await?;
     log::debug!("Sent FetchResponse");
     log::debug!("FetchResponse: {:?}", response);
