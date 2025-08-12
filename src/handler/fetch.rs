@@ -56,7 +56,7 @@ where
                                     }
                                     match log_store.read_records(read_keys).await {
                                         Ok(records) => {
-                                            log::info!("Read records for topic {:?} partition {}: record size {:?}", topic_id, partition.partition, records.len());
+                                            log::debug!("Read records for topic {:?} partition {}: record size {:?}", topic_id, partition.partition, records.len());
                                             partition_response.error_code = 0;
                                             partition_response.records = Some(records);
                                             partition_response.high_watermark = current_offset + 1;
