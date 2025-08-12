@@ -51,6 +51,7 @@ where
                                 Ok(keys) => {
                                     match log_store.read_records(keys).await {
                                         Ok(records) => {
+                                            log::debug!("Read records for topic {:?} partition {}: {:?}", topic_id, partition.partition, records);
                                             partition_response.error_code = 0;
                                             partition_response.records = Some(records);
                                             partition_response.high_watermark = current_offset + 1;
@@ -116,7 +117,7 @@ where
         topic_responses.push(topic_response);
     }
     response.responses = topic_responses;
-    
+    log::debug!("Ready to send FetchResponse: {:?}", response);
     send_kafka_response(stream, header, &response).await?;
     log::debug!("Sent FetchResponse");
     log::debug!("FetchResponse: {:?}", response);

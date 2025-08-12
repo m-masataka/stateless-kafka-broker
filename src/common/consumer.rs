@@ -47,20 +47,22 @@ impl ConsumerGroup {
     ) -> Option<&ConsumerGroupPartition> {
         if self.topics.is_none() {
             log::warn!("❗ topics is None");
-        }
-        if let Some(topics) = &self.topics {
-            for topic in topics {
-                log::debug!("Topic: '{}'", topic.name);
-                for part in &topic.partitions {
-                    log::debug!("  Partition: {}, offset: {}", part.partition_index, part.committed_offset);
+            return None;
+        } else {
+            if let Some(topics) = &self.topics {
+                for topic in topics {
+                    log::debug!("Topic: '{}'", topic.name);
+                    for part in &topic.partitions {
+                        log::debug!("  Partition: {}, offset: {}", part.partition_index, part.committed_offset);
+                    }
                 }
             }
+            self.topics
+                .as_ref()? 
+                .iter()
+                .find(|t| t.name == topic_name)
+                .and_then(|t| t.partitions.iter().find(|p| p.partition_index == partition_index))
         }
-        self.topics
-            .as_ref()? 
-            .iter()
-            .find(|t| t.name == topic_name)
-            .and_then(|t| t.partitions.iter().find(|p| p.partition_index == partition_index))
     }
 
     pub fn get_member_by_id(&self, member_id: &str) -> Option<&ConsumerGroupMember> {
