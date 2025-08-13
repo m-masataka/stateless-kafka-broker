@@ -10,7 +10,7 @@ pub enum LogStoreImpl {
 }
 
 impl LogStore for LogStoreImpl {
-    async fn write_records(&self, topic: &str, partition: i32, start_offset: i64, records: Option<&Bytes>) -> anyhow::Result<(i64, String)> {
+    async fn write_records(&self, topic: &str, partition: i32, start_offset: i64, records: Option<&Bytes>) -> anyhow::Result<(i64, String, u64)> {
         match self {
             LogStoreImpl::File(f) => f.write_records(topic, partition, start_offset, records).await,
             LogStoreImpl::S3(s) => s.write_records(topic, partition, start_offset, records).await,

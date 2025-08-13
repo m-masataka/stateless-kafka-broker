@@ -26,9 +26,10 @@ impl S3LogStore {
 }
 
 impl UnsendLogStore for S3LogStore {
-    async fn write_records(&self, topic_id: &str, partition: i32, start_offset: i64, records: Option<&Bytes>) -> anyhow::Result<(i64, String)> {
+    async fn write_records(&self, topic_id: &str, partition: i32, start_offset: i64, records: Option<&Bytes>) -> anyhow::Result<(i64, String, u64)> {
         if let Some(data) = records {
             let object_key = self.log_key(topic_id, partition, start_offset);
+            log::debug!("Writing records to S3 at key: {}", object_key);
             
             let (output, current_offset) = bytes_to_output(data, start_offset)?;
             
@@ -39,7 +40,7 @@ impl UnsendLogStore for S3LogStore {
                 })?;
             
             log::debug!("Successfully wrote batch to S3 for topic: {}, partition: {}", topic_id, partition);
-            Ok((current_offset, object_key))
+            Ok((current_offset, object_key, output.len() as u64))
         } else {
             Err(anyhow::anyhow!("No records to write"))
         }

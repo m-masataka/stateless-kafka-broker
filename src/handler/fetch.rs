@@ -1,3 +1,4 @@
+use bytes::Bytes;
 use tokio::io::AsyncWrite;
 use anyhow::Result;
 use kafka_protocol::{
@@ -12,7 +13,7 @@ use kafka_protocol::{
     },
 };
 
-use crate::{common::response::send_kafka_response, storage::{index_store_impl::IndexStoreImpl, log_store_impl::LogStoreImpl, meta_store_impl::MetaStoreImpl}, traits::meta_store::MetaStore};
+use crate::{common::{index::{get_keys_before_threshold, IndexData}, response::send_kafka_response}, storage::{index_store_impl::IndexStoreImpl, log_store_impl::LogStoreImpl, meta_store_impl::MetaStoreImpl}, traits::meta_store::MetaStore};
 use crate::traits::log_store::LogStore;
 use crate::traits::index_store::IndexStore;
 
@@ -48,43 +49,53 @@ where
                     match index_store.read_offset(&topic_id.to_string(), partition.partition).await {
                         Ok(current_offset) => {
                             match index_store.get_index_from_start_offset(&topic_id.to_string(), partition.partition, partition.fetch_offset).await {
-                                Ok(keys) => {
-                                    log::debug!("Read index for topic {:?} partition {}, key.len() {}", topic_id, partition.partition, keys.len());
-                                    let mut read_keys = keys.clone();
-                                    if read_keys.len() > 50 {
-                                        read_keys = read_keys[0..50].to_vec(); // Limit to 10 keys for performance
-                                    }
+                                Ok(index_data) => {
+                                    log::debug!("Read index for topic {:?} partition {}", topic_id, partition.partition);
+                                    let threshold = 10 * 1024 * 1024; // 1MB threshold TODO: make this configurable
+                                    let read_keys: Vec<String> = get_keys_before_threshold(index_data, threshold);
+                                    log::debug!("Read keys for topic {:?} partition {}: len {}", topic_id, partition.partition, read_keys.len());
                                     match log_store.read_records(read_keys).await {
                                         Ok(records) => {
                                             log::debug!("Read records for topic {:?} partition {}: record size {:?}", topic_id, partition.partition, records.len());
-                                            partition_response.error_code = 0;
-                                            partition_response.records = Some(records);
-                                            partition_response.high_watermark = current_offset + 1;
-                                            partition_response.last_stable_offset = current_offset + 1;
-                                            partition_response.log_start_offset = 0; //TODO: Set log start offset
-                                            partition_response.partition_index = partition.partition;
+                                            if records.len() == 0 {
+                                                log::debug!("No records found for topic {:?} partition {}", topic_id, partition.partition);
+                                                // if no data found, set error code to 0 and return empty records
+                                                partition_response.error_code = 0;
+                                                partition_response.partition_index = partition.partition;
+                                                partition_response.records = None;
+                                                partition_response.high_watermark = current_offset + 1;
+                                                partition_response.last_stable_offset = current_offset + 1;
+                                                partition_response.log_start_offset = 0; //TODO: Set log start offset
+                                            } else {
+                                                partition_response.error_code = 0;
+                                                partition_response.records = Some(records);
+                                                partition_response.high_watermark = current_offset + 1;
+                                                partition_response.last_stable_offset = current_offset + 1;
+                                                partition_response.log_start_offset = 0; //TODO: Set log start offset
+                                                partition_response.partition_index = partition.partition;
+                                            }
                                         }
                                         Err(e) => {
-                                            log::debug!("Failed to read records for topic {:?} partition {}: {:?}", topic_id, partition.partition, e);
+                                            log::debug!("(read_records) Failed to read records for topic {:?} partition {}: {:?}", topic_id, partition.partition, e);
                                             // if no data found, set error code to 0 and return empty records
                                             partition_response.error_code = 0;
                                             partition_response.partition_index = partition.partition;
-                                            partition_response.records = None;
-                                            partition_response.high_watermark = 0;
-                                            partition_response.last_stable_offset = 0;
+                                            partition_response.records = Some(Bytes::new());
+                                            partition_response.high_watermark = current_offset + 1;
+                                            partition_response.last_stable_offset = current_offset + 1;
                                             partition_response.log_start_offset = 0;
                                             partition_response.partition_index = partition.partition;
                                         }
                                     }
                                 }
                                 Err(e) => {
-                                    log::debug!("Failed to read records for topic {:?} partition {}: {:?}", topic_id, partition.partition, e);
+                                    log::debug!("(get_index_from_start_offset) Failed to read records for topic {:?} partition {}: {:?}", topic_id, partition.partition, e);
                                     // if no data found, set error code to 0 and return empty records
                                     partition_response.error_code = 0;
                                     partition_response.partition_index = partition.partition;
                                     partition_response.records = None;
-                                    partition_response.high_watermark = 0;
-                                    partition_response.last_stable_offset = 0;
+                                    partition_response.high_watermark = current_offset + 1;
+                                    partition_response.last_stable_offset = current_offset + 1;
                                     partition_response.log_start_offset = 0;
                                     partition_response.partition_index = partition.partition;
                                 }

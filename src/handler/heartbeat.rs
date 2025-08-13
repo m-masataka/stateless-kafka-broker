@@ -17,6 +17,6 @@ where
     response.error_code = 0;
 
     send_kafka_response(stream, header, &response).await?;
-    println!("Sent HeartbeatResponse");
+    log::info!("Heartbeat response sent successfully for API VERSION {}", header.request_api_version);
     Ok(())
 }

@@ -26,7 +26,7 @@ impl FileLogStore {
 }
 
 impl UnsendLogStore for FileLogStore {
-    async fn write_records(&self, topic_id: &str, partition: i32, start_offset: i64,  records: Option<&Bytes>) -> anyhow::Result<(i64, String)> {
+    async fn write_records(&self, topic_id: &str, partition: i32, start_offset: i64,  records: Option<&Bytes>) -> anyhow::Result<(i64, String, u64)> {
         // Check if the log store directory exists, if not create it
         if let Some(data) = records {
             let object_key = self.log_key(topic_id, partition, start_offset);
@@ -41,7 +41,7 @@ impl UnsendLogStore for FileLogStore {
             
             log::debug!("Successfully wrote batch to file for topic: {}, partition: {}", topic_id, partition);
             let object_key_str = object_key.to_str().unwrap_or("Invalid UTF-8 path").to_string();
-            Ok((current_offset, object_key_str))
+            Ok((current_offset, object_key_str, output.len() as u64))
         } else {
             Err(anyhow::anyhow!("No records to write"))
         }
