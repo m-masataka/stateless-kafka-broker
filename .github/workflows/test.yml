@@ -121,4 +121,11 @@ jobs:
       if: failure()
       run: |
         echo "🔍 Dumping rust-server.log due to test failure..."
-        cat rust-server.log || echo "⚠️ rust-server.log not found"
+        tail -n 200 rust-server.log || echo "⚠️ rust-server.log not found"
+
+    - name: Upload rust-server.log on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: rust-server-log
+        path: rust-server.log
