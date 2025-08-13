@@ -13,7 +13,7 @@ use kafka_protocol::{
     },
 };
 
-use crate::{common::{index::{get_keys_before_threshold, IndexData}, response::send_kafka_response}, storage::{index_store_impl::IndexStoreImpl, log_store_impl::LogStoreImpl, meta_store_impl::MetaStoreImpl}, traits::meta_store::MetaStore};
+use crate::{common::{index::{get_keys_before_threshold}, response::send_kafka_response}, storage::{index_store_impl::IndexStoreImpl, log_store_impl::LogStoreImpl, meta_store_impl::MetaStoreImpl}, traits::meta_store::MetaStore};
 use crate::traits::log_store::LogStore;
 use crate::traits::index_store::IndexStore;
 
