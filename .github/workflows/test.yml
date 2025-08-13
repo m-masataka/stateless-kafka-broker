@@ -54,6 +54,18 @@ jobs:
         echo "Setting mc alias and creating bucket"
         mc alias set local http://127.0.0.1:9000 minioadmin minioadmin
         mc mb local/mybucket || true
+        
+    - name: Wait for MinIO to be ready and create bucket
+      run: |
+        echo "Waiting for MinIO to be ready..."
+        for i in {1..20}; do
+          mc alias set local http://127.0.0.1:9000 minioadmin minioadmin && mc ls local/ && break
+          echo "Waiting for MinIO... (${i})"
+          sleep 3
+        done
+
+        echo "Creating bucket"
+        mc mb local/mybucket || echo "Bucket already exists"
 
     - name: Checkout
       uses: actions/checkout@v4
