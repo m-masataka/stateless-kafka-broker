@@ -1,6 +1,6 @@
 # Stateless Kafka Broker
 
-A minimal, Stateless Kafka broker implementation in Rust.
+A minimal, Stateless Kafka broker implementation in Rust..
 
 ## 🚀 Overview
 
