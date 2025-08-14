@@ -1,4 +1,4 @@
-use crate::{storage::redis::redis_index_store::RedisIndexStore, traits::index_store::{IndexStore, UnsendIndexStore}};
+use crate::{common::index::IndexData, storage::redis::redis_index_store::RedisIndexStore, traits::index_store::{IndexStore, UnsendIndexStore}};
 
 pub enum IndexStoreImpl {
     Redis(RedisIndexStore),
@@ -29,9 +29,9 @@ impl IndexStore for IndexStoreImpl {
         }
     }
 
-    async fn set_index(&self, topic: &str, partition: i32, start_offset: i64, data_path: &str) -> anyhow::Result<()> {
+    async fn set_index(&self, topic: &str, partition: i32, start_offset: i64, data: &IndexData) -> anyhow::Result<()> {
         match self {
-            IndexStoreImpl::Redis(r) => r.set_index(topic, partition, start_offset, data_path).await,
+            IndexStoreImpl::Redis(r) => r.set_index(topic, partition, start_offset, data).await,
         }
     }
 
@@ -40,7 +40,7 @@ impl IndexStore for IndexStoreImpl {
         topic: &str,
         partition: i32,
         start_offset: i64,
-    ) -> anyhow::Result<Vec<String>> {
+    ) -> anyhow::Result<Vec<IndexData>> {
         match self {
             IndexStoreImpl::Redis(r) => r.get_index_from_start_offset(topic, partition, start_offset).await,
         }

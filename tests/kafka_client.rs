@@ -44,7 +44,7 @@ async fn test_consumer_group_join_and_fetch() {
                 FutureRecord::to(&topic_name)
                     .payload(&payload)
                     .key(&key),
-                Duration::from_secs(5),
+                Duration::from_secs(60),
             )
             .await
             .unwrap_or_else(|(e, _)| panic!("Failed to send message {}: {:?}", i, e));
@@ -75,7 +75,7 @@ async fn test_consumer_group_join_and_fetch() {
         .map(|i| format!("test-message{}", i))
         .collect();
 
-    let timeout = std::time::Instant::now() + Duration::from_secs(20);
+    let timeout = std::time::Instant::now() + Duration::from_secs(60);
 
     while received_messages != expected_messages && std::time::Instant::now() < timeout {
         match stream.next().await {

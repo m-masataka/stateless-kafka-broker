@@ -1,4 +1,6 @@
-use aws_config::Region;
+use std::time::Duration;
+
+use aws_config::{timeout::TimeoutConfig, Region};
 use aws_sdk_s3::{config::{Credentials, SharedCredentialsProvider}, primitives::ByteStream, Client};
 use bytes::Bytes;
 use anyhow::Result;
@@ -14,6 +16,12 @@ impl S3Client {
         let credentials = Credentials::new(access_key.to_string(), secret_key.to_string(), None, None, "custom");
         let config = aws_sdk_s3::config::Builder::new()
             .behavior_version_latest()
+            .timeout_config(
+                TimeoutConfig::builder()
+                    .operation_timeout(Duration::from_secs(20))
+                    .operation_attempt_timeout(Duration::from_millis(1500))
+                    .build()
+            )
             .region(Region::new(region.to_string()))
             .credentials_provider(SharedCredentialsProvider::new(credentials))
             .force_path_style(true)

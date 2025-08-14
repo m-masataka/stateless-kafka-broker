@@ -49,7 +49,7 @@ where
                 partition.committed_offset,
             ).await {
                 Ok(_) => {
-                    log::info!("Successfully committed offset for topic: {}, partition: {}", topic.name.as_str(), partition.partition_index);
+                    log::debug!("Successfully committed offset for topic: {}, partition: {}", topic.name.as_str(), partition.partition_index);
                     let mut partition_response = OffsetCommitResponsePartition::default();
                     partition_response.partition_index = partition.partition_index;
                     partition_response.error_code = 0;
@@ -66,7 +66,7 @@ where
             // Check updated group
             match meta_store.get_consumer_group(&request.group_id).await {
                 Ok(Some(consumer_group)) => {
-                    log::info!("Updated consumer group: {:?}", consumer_group);
+                    log::debug!("Updated consumer group: {:?}", consumer_group);
                 },
                 Ok(None) => {
                     log::warn!("Consumer group {} not found after commit", request.group_id.as_str());

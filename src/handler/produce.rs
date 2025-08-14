@@ -20,6 +20,7 @@ use kafka_protocol::
 
 use crate::{
     common::response::send_kafka_response,
+    common::index::index_data,
     storage::{index_store_impl::IndexStoreImpl, log_store_impl::LogStoreImpl, meta_store_impl::MetaStoreImpl},
     traits::{index_store::IndexStore, log_store::LogStore, meta_store::MetaStore}
 };
@@ -98,18 +99,19 @@ where
                     request_partition_data.records.as_ref(),
                 ).await
             { 
-                Ok((current_offset, key )) => {
+                Ok((current_offset, key , size)) => {
                     partition_produce_response.error_code = 0;
                     partition_produce_response.base_offset = start_offset;
                     partition_produce_response.log_append_time_ms = 0;
                     partition_produce_response.log_start_offset = 0;
 
                     // Update the index store with the new base offset and key
+                    let data = index_data(&key, size);
                     index_store.set_index(
                         &topic_id.to_string(),
                         request_partition_data.index,
                         current_offset,
-                        &key,
+                        &data,
                     ).await?;
 
                     // update the offset in the index store

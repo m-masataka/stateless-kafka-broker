@@ -55,6 +55,18 @@ jobs:
         mc alias set local http://127.0.0.1:9000 minioadmin minioadmin
         mc mb local/mybucket || true
 
+    - name: Wait for MinIO to be ready and create bucket
+      run: |
+        echo "Waiting for MinIO to be ready..."
+        for i in {1..20}; do
+          mc alias set local http://127.0.0.1:9000 minioadmin minioadmin && mc ls local/ && break
+          echo "Waiting for MinIO... (${i})"
+          sleep 3
+        done
+
+        echo "Creating bucket"
+        mc mb local/mybucket || echo "Bucket already exists"
+
     - name: Checkout
       uses: actions/checkout@v4
       
@@ -92,7 +104,7 @@ jobs:
         KAFKA_LOG_STORE_TYPE: s3
         KAFKA_LOG_STORE_S3_BUCKET: mybucket
         KAFKA_LOG_STORE_S3_PREFIX: logs
-        KAFKA_LOG_STORE_S3_ENDPOINT: http://localhost:9000
+        KAFKA_LOG_STORE_S3_ENDPOINT: http://127.0.0.1:9000
         KAFKA_LOG_STORE_S3_ACCESS_KEY: minioadmin
         KAFKA_LOG_STORE_S3_SECRET_KEY: minioadmin
         KAFKA_META_STORE_TYPE: redis
@@ -121,4 +133,11 @@ jobs:
       if: failure()
       run: |
         echo "🔍 Dumping rust-server.log due to test failure..."
-        cat rust-server.log || echo "⚠️ rust-server.log not found"
+        tail -n 200 rust-server.log || echo "⚠️ rust-server.log not found"
+
+    - name: Upload rust-server.log on failure
+      if: failure()
+      uses: actions/upload-artifact@v4
+      with:
+        name: rust-server-log
+        path: rust-server.log

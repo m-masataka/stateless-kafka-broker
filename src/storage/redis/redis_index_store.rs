@@ -1,5 +1,6 @@
 use crate::traits::index_store::UnsendIndexStore;
 use crate::storage::redis::redis_client::RedisClient;
+use crate::common::index::IndexData;
 
 pub struct RedisIndexStore {
     client: RedisClient,
@@ -67,10 +68,16 @@ impl UnsendIndexStore for RedisIndexStore {
         topic: &str,
         partition: i32,
         start_offset: i64,
-        data_path: &str,
+        data: &IndexData,
     ) -> anyhow::Result<()> {
         let key = format!("index:{}:{}", topic, partition);
-        let _: () = self.client.zadd(&key, data_path, start_offset).await?;
+        log::debug!("Setting index for topic: {}, partition: {}, start_offset: {}", topic, partition, start_offset);
+        log::debug!("Key for index: {}", key);
+        let data_string = serde_json::to_string(data).map_err(|e| {
+            log::error!("Failed to serialize index data: {:?}", e);
+            anyhow::anyhow!("Serialization error")
+        })?;
+        let _: () = self.client.zadd(&key, &data_string, start_offset).await?;
         Ok(())
     }
 
@@ -79,11 +86,19 @@ impl UnsendIndexStore for RedisIndexStore {
         topic: &str,
         partition: i32,
         start_offset: i64,
-    ) -> anyhow::Result<Vec<String>> {
+    ) -> anyhow::Result<Vec<IndexData>> {
         let key = format!("index:{}:{}", topic, partition);
         let results: Vec<String> = self.client
             .zrangebyscore(&key, start_offset, i64::MAX)
             .await?;
-        Ok(results)
+        let mut index_data = Vec::new();
+        for result in results {
+            let data: IndexData = serde_json::from_str(&result).map_err(|e| {
+                log::error!("Failed to deserialize index data: {:?}", e);
+                anyhow::anyhow!("Deserialization error")
+            })?;
+            index_data.push(data);
+        }
+        Ok(index_data)
     }
 }
