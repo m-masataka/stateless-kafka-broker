@@ -72,6 +72,7 @@ where
                 .topic_id;
 
 
+            let lock_start = Instant::now();
             // lock index store
             try_lock_with_retry(
                 index_store,
@@ -136,6 +137,8 @@ where
                             log::error!("Failed to unlock index store: {:?}", e);
                             ResponseError::KafkaStorageError
                         })?;
+                    let lock_duration = lock_start.elapsed();
+                    log::debug!("Lock duration: {:.2?} ms", lock_duration.as_millis());
                 }
                 Err(e) => {
                     log::error!("Failed to write records to file: {:?}", e);
