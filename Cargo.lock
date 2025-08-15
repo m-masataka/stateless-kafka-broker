@@ -2919,6 +2919,7 @@ dependencies = [
  "kafka-protocol",
  "log",
  "mockall",
+ "rand",
  "rdkafka",
  "redis",
  "serde",

@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use crate::common::utils::jittered_delay;
 use crate::storage::s3::s3_client::S3Client;
 use crate::traits::meta_store::UnsendMetaStore;
 use crate::common::topic_partition::Topic;
@@ -288,7 +289,7 @@ impl S3MetaStore {
     }
 
     async fn acquire_lock(&self, bucket: &str, lock_key: &str) -> Result<()> {
-        const MAX_RETRIES: usize = 5;
+        const MAX_RETRIES: usize = 200;
         const RETRY_DELAY_MS: u64 = 100;
 
         let mut acquired = false;
@@ -308,7 +309,7 @@ impl S3MetaStore {
                         lock_key,
                         e
                     );
-                    sleep(Duration::from_millis(RETRY_DELAY_MS)).await;
+                    sleep(Duration::from_millis(jittered_delay(RETRY_DELAY_MS))).await;
                 }
             }
         }

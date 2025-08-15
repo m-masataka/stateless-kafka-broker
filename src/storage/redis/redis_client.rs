@@ -7,6 +7,7 @@ use redis::ToRedisArgs;
 use redis::FromRedisValue;
 use tokio::time::sleep;
 use std::time::Duration;
+use crate::common::utils::jittered_delay;
 
 #[derive(Clone)]
 pub struct RedisClient {
@@ -148,7 +149,7 @@ impl RedisClient {
                         }
                     }
                     // drop(c); // Not necessary in async scope; will drop on scope exit
-                    sleep(Duration::from_millis(retry_delay_ms)).await;
+                    sleep(Duration::from_millis(jittered_delay(retry_delay_ms))).await;
                 }
                 return Ok(acquired);
             }

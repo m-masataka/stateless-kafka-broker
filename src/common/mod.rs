@@ -4,3 +4,4 @@ pub mod record;
 pub mod consumer;
 pub mod response;
 pub mod index;
+pub mod utils;
