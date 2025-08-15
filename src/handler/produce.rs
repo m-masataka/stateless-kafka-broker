@@ -40,8 +40,7 @@ pub async fn handle_produce_request<W>(
 where
     W: AsyncWrite + Unpin + Send,
 {
-    log::info!("Handling ProduceRequest API VERSION {}", header.request_api_version);
-    log::debug!("ProduceRequest: {:?}", request);
+    log::debug!("Handling ProduceRequest API VERSION {}", header.request_api_version);
 
     let mut response = ProduceResponse::default();
     response.throttle_time_ms = 0;
@@ -91,6 +90,7 @@ where
                     ResponseError::KafkaStorageError
                 })?;
 
+            let start = Instant::now();  // Start timing the write operation for performance measurement
             match log_store
                 .write_records(
                     &topic_id.to_string(),
@@ -100,6 +100,15 @@ where
                 ).await
             { 
                 Ok((current_offset, key , size)) => {
+                    let elapsed = start.elapsed();
+                    log::debug!(
+                        "📝 write_records took {:.2?} ms for topic={}, partition={}, size={:?}",
+                        elapsed.as_millis(),
+                        topic_id.to_string(),
+                        request_partition_data.index,
+                        request_partition_data.records.as_ref().map(|r| r.len())
+                    );
+
                     partition_produce_response.error_code = 0;
                     partition_produce_response.base_offset = start_offset;
                     partition_produce_response.log_append_time_ms = 0;
@@ -163,7 +172,6 @@ where
     node_endpoint.port = cluster_config.port;
     response.node_endpoints = vec![node_endpoint];
 
-    log::debug!("ProduceResponse: {:?}", response);
     send_kafka_response(stream, header, &response).await?;
     log::debug!("Sent ProduceResponse");
     Ok(())
