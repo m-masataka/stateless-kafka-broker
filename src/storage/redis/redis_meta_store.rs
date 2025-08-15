@@ -336,7 +336,7 @@ impl RedisMetaStore {
         Fut: std::future::Future<Output = Result<T>> + Send,
         T: Send + 'static,
     {
-        const MAX_RETRIES: usize = 5;
+        const MAX_RETRIES: usize = 200;
         const RETRY_DELAY_MS: u64 = 100;
     
         let acquired = client.try_acquire_lock(lock_key, MAX_RETRIES as i64, RETRY_DELAY_MS, ttl_secs).await?;
