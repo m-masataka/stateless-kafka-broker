@@ -15,7 +15,6 @@ use kafka_protocol::error::ResponseError::UnknownTopicOrPartition;
 use crate::storage::meta_store_impl::MetaStoreImpl;
 use crate::{common::{config::ClusterConfig, response::send_kafka_response, topic_partition::Topic}};
 use crate::traits::meta_store::MetaStore;
-use tokio::time::{sleep, Duration};
 
 pub async fn handle_metadata_request<W>(
     stream: &mut W,
@@ -29,7 +28,6 @@ where
 {
     log::info!("Handling MetadataRequest API VERSION {}", header.request_api_version);
     log::debug!("MetadataRequest: {:?}", request);
-    sleep(Duration::from_secs(5)).await;
 
     let mut response = MetadataResponse::default();
     let brokers = cluster_config

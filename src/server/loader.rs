@@ -20,7 +20,7 @@ use std::{
 use redis::cluster::ClusterClient;
 use crate::common::config::ServerConfig;
 
-pub async fn load_log_store(server_config: &ServerConfig) -> Result<Arc<LogStoreImpl>> {
+pub async fn load_log_store(server_config: &ServerConfig) -> Result<LogStoreImpl> {
     let log_store_load = match &server_config.log_store_type {
         StorageType::S3 => {
             log::info!("Using S3 log store");
@@ -31,11 +31,11 @@ pub async fn load_log_store(server_config: &ServerConfig) -> Result<Arc<LogStore
             let secret_key = server_config.log_store_s3_secret_key.clone().ok_or_else(|| anyhow::anyhow!("S3 secretkey not configured"))?;
             let region = server_config.log_store_s3_region.clone().unwrap_or_else(|| "us-east-1".to_string());
             let s3_client = S3Client::new(&endpoint, &access_key, &secret_key, &region).await?;
-            Arc::new(LogStoreImpl::S3(S3LogStore::new(s3_client, bucket, prefix)))
+            LogStoreImpl::S3(S3LogStore::new(s3_client, bucket, prefix))
         },
         StorageType::File => {
             log::info!("Using File log store");
-            Arc::new(LogStoreImpl::File(FileLogStore::new()))
+            LogStoreImpl::File(FileLogStore::new())
         },
         _ => {
             return Err(anyhow::anyhow!("Unsupported log store backend"));
@@ -44,8 +44,8 @@ pub async fn load_log_store(server_config: &ServerConfig) -> Result<Arc<LogStore
     Ok(log_store_load)
 }
 
-pub async fn load_index_store(server_config: &ServerConfig) -> Result<Arc<IndexStoreImpl>> {
-    let index_store_load: Arc<IndexStoreImpl> = match &server_config.index_store_type {
+pub async fn load_index_store(server_config: &ServerConfig) -> Result<IndexStoreImpl> {
+    let index_store_load: IndexStoreImpl = match &server_config.index_store_type {
         StorageType::Redis => {
             log::info!("Using Redis index store");
             let redis_urls = server_config.index_store_redis_urls.clone()
@@ -64,7 +64,7 @@ pub async fn load_index_store(server_config: &ServerConfig) -> Result<Arc<IndexS
                 let conn = client.get_multiplexed_async_connection().await?;
                 RedisClient::new(false, None, Some(Arc::new(Mutex::new(conn))))
             };
-            Arc::new(IndexStoreImpl::Redis(RedisIndexStore::new(redis_client)))
+            IndexStoreImpl::Redis(RedisIndexStore::new(redis_client))
         },
         _ => {
             return Err(anyhow::anyhow!("Unsupported index store backend"));
@@ -73,7 +73,7 @@ pub async fn load_index_store(server_config: &ServerConfig) -> Result<Arc<IndexS
     Ok(index_store_load)
 }
 
-pub async fn load_meta_store(server_config: &ServerConfig) -> Result<Arc<MetaStoreImpl>> {
+pub async fn load_meta_store(server_config: &ServerConfig) -> Result<MetaStoreImpl> {
     let meta_store_load =  match &server_config.meta_store_type {
         StorageType::S3 => {
             log::info!("Using S3 meta store");
@@ -84,10 +84,10 @@ pub async fn load_meta_store(server_config: &ServerConfig) -> Result<Arc<MetaSto
             let secret_key = server_config.meta_store_s3_secret_key.clone().ok_or_else(|| anyhow::anyhow!("S3 secretkey not configured"))?;
             let region = server_config.meta_store_s3_region.clone().unwrap_or_else(|| "us-east-1".to_string());
             let s3_client = S3Client::new(&endpoint, &access_key, &secret_key, &region).await?;
-            Arc::new(MetaStoreImpl::S3(S3MetaStore::new(s3_client, bucket, prefix)))
+            MetaStoreImpl::S3(S3MetaStore::new(s3_client, bucket, prefix))
         },
         StorageType::File => {
-            Arc::new(MetaStoreImpl::File(FileMetaStore::new()))
+            MetaStoreImpl::File(FileMetaStore::new())
         },
         StorageType::Redis => {
             log::info!("Using Redis meta store");
@@ -109,7 +109,7 @@ pub async fn load_meta_store(server_config: &ServerConfig) -> Result<Arc<MetaSto
                 let conn = client.get_multiplexed_async_connection().await?;
                 RedisClient::new(false, None, Some(Arc::new(Mutex::new(conn))))
             };
-            Arc::new(MetaStoreImpl::Redis(RedisMetaStore::new(redis_client)))
+            MetaStoreImpl::Redis(RedisMetaStore::new(redis_client))
         }
     };
     Ok(meta_store_load)
