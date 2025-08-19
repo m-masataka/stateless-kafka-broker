@@ -1,16 +1,6 @@
+use crate::server::loader::{load_index_store, load_log_store, load_meta_store};
 use crate::storage::index_store_impl::IndexStoreImpl;
-use crate::storage::redis::redis_index_store::RedisIndexStore;
-use crate::storage::s3::s3_client::S3Client;
-use crate::storage::s3::s3_log_store::S3LogStore;
-use crate::storage::{
-    file::file_meta_store::FileMetaStore,
-    file::file_log_store::FileLogStore,
-    log_store_impl::LogStoreImpl,
-    meta_store_impl::MetaStoreImpl,
-    s3::s3_meta_store::S3MetaStore,
-    redis::redis_meta_store::RedisMetaStore,
-    redis::redis_client::RedisClient,
-};
+use crate::common::config::ServerConfig;
 
 use crate::handler::{
     api_versions::handle_api_versions_request,
@@ -29,9 +19,10 @@ use crate::handler::{
     leave_group::handle_leave_group_request,
     consumer_group_heartbeat::handle_consumer_group_heartbeat_request,
 };
-use crate::common::config::{load_cluster_config, load_server_config, ClusterConfig, StorageType};
+use crate::common::config::{load_cluster_config, load_server_config, ClusterConfig};
+use crate::storage::log_store_impl::LogStoreImpl;
+use crate::storage::meta_store_impl::MetaStoreImpl;
 use anyhow::Result;
-use tokio::sync::Mutex;
 use std::{
     sync::Arc,
 };
@@ -58,113 +49,27 @@ use kafka_protocol::messages::{
     consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
 };
 use kafka_protocol::protocol::Decodable;
-use redis::cluster::ClusterClient;
 
 pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
     env_logger::init();
     log::info!("Starting Kafka-compatible server...");
     let cluster_conf_load = Arc::new(load_cluster_config(config_path)?);
-    let server_config = load_server_config()?;
+    let server_config_load = Arc::new(load_server_config()?);
 
 
-    let listener = tokio::net::TcpListener::bind(format!("{}:{}", server_config.host, server_config.port)).await?;
-    log::info!("Kafka-compatible server listening on port {}:{}", server_config.host, server_config.port);
+    let listener = tokio::net::TcpListener::bind(format!("{}:{}", server_config_load.host, server_config_load.port)).await?;
+    log::info!("Kafka-compatible server listening on port {}:{}", server_config_load.host, server_config_load.port);
 
-    let meta_store_load =  match &server_config.meta_store_type {
-        StorageType::S3 => {
-            log::info!("Using S3 meta store");
-            let bucket = server_config.meta_store_s3_bucket.clone().ok_or_else(|| anyhow::anyhow!("S3 bucket not configured"))?;
-            let prefix = server_config.meta_store_s3_prefix.clone();
-            let endpoint = server_config.meta_store_s3_endpoint.clone().unwrap_or_else(|| "https://s3.amazonaws.com".to_string());
-            let access_key = server_config.meta_store_s3_access_key.clone().ok_or_else(|| anyhow::anyhow!("S3 access key not configured"))?;
-            let secret_key = server_config.meta_store_s3_secret_key.clone().ok_or_else(|| anyhow::anyhow!("S3 secretkey not configured"))?;
-            let region = server_config.meta_store_s3_region.clone().unwrap_or_else(|| "us-east-1".to_string());
-            let s3_client = S3Client::new(&endpoint, &access_key, &secret_key, &region).await?;
-            Arc::new(MetaStoreImpl::S3(S3MetaStore::new(s3_client, bucket, prefix)))
-        },
-        StorageType::File => {
-            Arc::new(MetaStoreImpl::File(FileMetaStore::new()))
-        },
-        StorageType::Redis => {
-            log::info!("Using Redis meta store");
-            let redis_urls = server_config.meta_store_redis_urls
-                .unwrap_or_default()
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .collect::<Vec<String>>();
-            let redis_client: RedisClient = if redis_urls.len() > 1 {
-                log::info!("Using Redis Cluster with URLs: {:?}", redis_urls);
-                let client = ClusterClient::new(redis_urls)?;
-                let conn = client.get_async_connection().await?;
-                RedisClient::new(true, Some(Arc::new(Mutex::new(conn))), None)
-            } else {
-                log::info!("Using single Redis instance at: {}", redis_urls[0]);
-                let client = redis::Client::open(redis_urls[0].clone())?;
-                let conn = client.get_multiplexed_async_connection().await?;
-                RedisClient::new(false, None, Some(Arc::new(Mutex::new(conn))))
-            };
-            Arc::new(MetaStoreImpl::Redis(RedisMetaStore::new(redis_client)))
-        }
-    };
-
-    let log_store_load = match &server_config.log_store_type {
-        StorageType::S3 => {
-            log::info!("Using S3 log store");
-            let bucket = server_config.log_store_s3_bucket.clone().ok_or_else(|| anyhow::anyhow!("S3 bucket not configured"))?;
-            let prefix = server_config.log_store_s3_prefix.clone();
-            let endpoint = server_config.log_store_s3_endpoint.clone().unwrap_or_else(|| "https://s3.amazonaws.com".to_string());
-            let access_key = server_config.log_store_s3_access_key.clone().ok_or_else(|| anyhow::anyhow!("S3 access key not configured"))?;
-            let secret_key = server_config.log_store_s3_secret_key.clone().ok_or_else(|| anyhow::anyhow!("S3 secretkey not configured"))?;
-            let region = server_config.log_store_s3_region.clone().unwrap_or_else(|| "us-east-1".to_string());
-            let s3_client = S3Client::new(&endpoint, &access_key, &secret_key, &region).await?;
-            Arc::new(LogStoreImpl::S3(S3LogStore::new(s3_client, bucket, prefix)))
-        },
-        StorageType::File => {
-            log::info!("Using File log store");
-            Arc::new(LogStoreImpl::File(FileLogStore::new()))
-        },
-        _ => {
-            return Err(anyhow::anyhow!("Unsupported log store backend"));
-        }
-    };
-
-    let index_store_load = match &server_config.index_store_type {
-        StorageType::Redis => {
-            log::info!("Using Redis index store");
-            let redis_urls = server_config.index_store_redis_urls
-                .unwrap_or_default()
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .collect::<Vec<String>>();
-            let redis_client: RedisClient = if redis_urls.len() > 1 {
-                log::info!("Using Redis Cluster with URLs: {:?}", redis_urls);
-                let client = ClusterClient::new(redis_urls)?;
-                let conn = client.get_async_connection().await?;
-                RedisClient::new(true, Some(Arc::new(Mutex::new(conn))), None)
-            } else {
-                log::info!("Using single Redis instance at: {}", redis_urls[0]);
-                let client = redis::Client::open(redis_urls[0].clone())?;
-                let conn = client.get_multiplexed_async_connection().await?;
-                RedisClient::new(false, None, Some(Arc::new(Mutex::new(conn))))
-            };
-            Arc::new(IndexStoreImpl::Redis(RedisIndexStore::new(redis_client)))
-        },
-        _ => {
-            return Err(anyhow::anyhow!("Unsupported index store backend"));
-        }
-    };
     
     loop {
         let (stream, addr) = listener.accept().await?;
         log::info!("Accepted connection from {:?}", addr);
         let cluster_config = cluster_conf_load.clone();
-        let meta_store = meta_store_load.clone();
-        let log_store = log_store_load.clone();
-        let index_store = index_store_load.clone();
+        let server_config = server_config_load.clone();
 
         // Spawn a new task for each connection
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, cluster_config, meta_store, log_store, index_store).await {
+            if let Err(e) = handle_connection(stream, cluster_config, server_config).await {
                 log::error!("Connection error: {:?}", e);
             }
         });
@@ -173,10 +78,11 @@ pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
 
 async fn handle_connection(mut stream: tokio::net::TcpStream, 
     cluster_config: Arc<ClusterConfig>,
-    meta_store: Arc<MetaStoreImpl>,
-    log_store: Arc<LogStoreImpl>,
-    index_store: Arc<IndexStoreImpl>,
+    server_config: Arc<ServerConfig>,
 ) -> Result<()> {
+    let meta_store: MetaStoreImpl = load_meta_store(&server_config).await?; 
+    let log_store: LogStoreImpl = load_log_store(&server_config).await?;
+    let index_store: IndexStoreImpl= load_index_store(&server_config).await?;
     loop {
         // Read length prefix
         let mut length_buf = [0u8; 4];
@@ -220,7 +126,7 @@ async fn handle_connection(mut stream: tokio::net::TcpStream,
                 if let RequestKind::Metadata(ref req) =
                     RequestKind::Metadata(MetadataRequest::decode(&mut buf, header.request_api_version).unwrap())
                 {
-                    handle_metadata_request(&mut stream, &header, req, &cluster_config, &*meta_store).await?;
+                    handle_metadata_request(&mut stream, &header, req, &cluster_config, &meta_store).await?;
                 }
             }
             ApiKey::DeleteTopics => {
@@ -228,7 +134,7 @@ async fn handle_connection(mut stream: tokio::net::TcpStream,
                 if let RequestKind::DeleteTopics(ref req) =
                     RequestKind::DeleteTopics(DeleteTopicsRequest::decode(&mut buf, header.request_api_version).unwrap())
                 {
-                    handle_delete_topics_request(&mut stream, &header, req, &*meta_store).await?;
+                    handle_delete_topics_request(&mut stream, &header, req, &meta_store).await?;
                 }
             }
             ApiKey::FindCoordinator => {
@@ -244,7 +150,7 @@ async fn handle_connection(mut stream: tokio::net::TcpStream,
                 if let RequestKind::JoinGroup(ref req) =
                     RequestKind::JoinGroup(JoinGroupRequest::decode(&mut buf, header.request_api_version).unwrap())
                 {
-                    handle_join_group_request(&mut stream, &header, req, &*meta_store).await?;
+                    handle_join_group_request(&mut stream, &header, req, &meta_store).await?;
                 }
             }
             ApiKey::LeaveGroup => {
@@ -252,7 +158,7 @@ async fn handle_connection(mut stream: tokio::net::TcpStream,
                 if let RequestKind::LeaveGroup(ref req) =
                     RequestKind::LeaveGroup(LeaveGroupRequest::decode(&mut buf, header.request_api_version).unwrap())
                 {
-                    handle_leave_group_request(&mut stream, &header, req, &*meta_store).await?;
+                    handle_leave_group_request(&mut stream, &header, req, &meta_store).await?;
                 }
             }
             ApiKey::SyncGroup => {
@@ -260,7 +166,7 @@ async fn handle_connection(mut stream: tokio::net::TcpStream,
                 if let RequestKind::SyncGroup(ref req) =
                     RequestKind::SyncGroup(SyncGroupRequest::decode(&mut buf, header.request_api_version).unwrap())
                 {
-                    handle_sync_group_request(&mut stream, &header, req, &*meta_store).await?;
+                    handle_sync_group_request(&mut stream, &header, req, &meta_store).await?;
                 }
             }
             ApiKey::OffsetCommit => {
@@ -268,7 +174,7 @@ async fn handle_connection(mut stream: tokio::net::TcpStream,
                 if let RequestKind::OffsetCommit(ref req) =
                     RequestKind::OffsetCommit(OffsetCommitRequest::decode(&mut buf, header.request_api_version).unwrap())
                 {
-                    handle_offset_commit_request(&mut stream, &header, req, &*meta_store).await?;
+                    handle_offset_commit_request(&mut stream, &header, req, &meta_store).await?;
                 }
             }
             ApiKey::InitProducerId => {
@@ -276,7 +182,7 @@ async fn handle_connection(mut stream: tokio::net::TcpStream,
                 if let RequestKind::InitProducerId(ref req) =
                     RequestKind::InitProducerId(InitProducerIdRequest::decode(&mut buf, header.request_api_version).unwrap())
                 {
-                    handle_init_producer_id_request(&mut stream, &header, req, &*meta_store).await?;
+                    handle_init_producer_id_request(&mut stream, &header, req, &meta_store).await?;
                 }
             }
             ApiKey::OffsetFetch => {
@@ -284,7 +190,7 @@ async fn handle_connection(mut stream: tokio::net::TcpStream,
                 if let RequestKind::OffsetFetch(ref req) =
                     RequestKind::OffsetFetch(OffsetFetchRequest::decode(&mut buf, header.request_api_version).unwrap())
                 {
-                    handle_offset_fetch_request(&mut stream, &header, req, &*meta_store).await?;
+                    handle_offset_fetch_request(&mut stream, &header, req, &meta_store).await?;
                 }
             },
             ApiKey::Fetch => {
@@ -292,7 +198,7 @@ async fn handle_connection(mut stream: tokio::net::TcpStream,
                 if let RequestKind::Fetch(ref req) =
                     RequestKind::Fetch(FetchRequest::decode(&mut buf, header.request_api_version).unwrap())
                 {
-                    handle_fetch_request(&mut stream, &header, req, &*log_store, &*meta_store, &*index_store).await?;
+                    handle_fetch_request(&mut stream, &header, req, &log_store, &meta_store, &index_store).await?;
                 }
             },
             ApiKey::Produce => {
@@ -300,7 +206,7 @@ async fn handle_connection(mut stream: tokio::net::TcpStream,
                 if let RequestKind::Produce(ref req) =
                     RequestKind::Produce(ProduceRequest::decode(&mut buf, header.request_api_version).unwrap())
                 {
-                    handle_produce_request(&mut stream, &header, req, &cluster_config, &*meta_store, &*log_store, &*index_store).await?;
+                    handle_produce_request(&mut stream, &header, req, &cluster_config, &meta_store, &log_store, &index_store).await?;
                 }
             }
             ApiKey::CreateTopics => {
@@ -308,7 +214,7 @@ async fn handle_connection(mut stream: tokio::net::TcpStream,
                 if let RequestKind::CreateTopics(ref req) =
                     RequestKind::CreateTopics(CreateTopicsRequest::decode(&mut buf, header.request_api_version).unwrap())
                 {
-                    handle_create_topics_request(&mut stream, &header, req, &*meta_store).await?;
+                    handle_create_topics_request(&mut stream, &header, req, &meta_store).await?;
                 }
             }
             ApiKey::ConsumerGroupHeartbeat => {
@@ -316,7 +222,7 @@ async fn handle_connection(mut stream: tokio::net::TcpStream,
                 if let RequestKind::ConsumerGroupHeartbeat(ref req) =
                     RequestKind::ConsumerGroupHeartbeat(ConsumerGroupHeartbeatRequest::decode(&mut buf, header.request_api_version).unwrap())
                 {
-                    handle_consumer_group_heartbeat_request(&mut stream, &header, req, &*meta_store).await?;
+                    handle_consumer_group_heartbeat_request(&mut stream, &header, req, &meta_store).await?;
                 }
             }
             ApiKey::Heartbeat =>  {
