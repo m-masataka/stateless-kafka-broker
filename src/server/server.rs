@@ -1,5 +1,5 @@
+use crate::server::loader::{load_index_store, load_log_store, load_meta_store};
 use crate::storage::index_store_impl::IndexStoreImpl;
-use crate::storage::redis::redis_index_store::RedisIndexStore;
 use crate::storage::s3::s3_client::S3Client;
 use crate::storage::s3::s3_log_store::S3LogStore;
 use crate::storage::{
@@ -70,89 +70,9 @@ pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(format!("{}:{}", server_config.host, server_config.port)).await?;
     log::info!("Kafka-compatible server listening on port {}:{}", server_config.host, server_config.port);
 
-    let meta_store_load =  match &server_config.meta_store_type {
-        StorageType::S3 => {
-            log::info!("Using S3 meta store");
-            let bucket = server_config.meta_store_s3_bucket.clone().ok_or_else(|| anyhow::anyhow!("S3 bucket not configured"))?;
-            let prefix = server_config.meta_store_s3_prefix.clone();
-            let endpoint = server_config.meta_store_s3_endpoint.clone().unwrap_or_else(|| "https://s3.amazonaws.com".to_string());
-            let access_key = server_config.meta_store_s3_access_key.clone().ok_or_else(|| anyhow::anyhow!("S3 access key not configured"))?;
-            let secret_key = server_config.meta_store_s3_secret_key.clone().ok_or_else(|| anyhow::anyhow!("S3 secretkey not configured"))?;
-            let region = server_config.meta_store_s3_region.clone().unwrap_or_else(|| "us-east-1".to_string());
-            let s3_client = S3Client::new(&endpoint, &access_key, &secret_key, &region).await?;
-            Arc::new(MetaStoreImpl::S3(S3MetaStore::new(s3_client, bucket, prefix)))
-        },
-        StorageType::File => {
-            Arc::new(MetaStoreImpl::File(FileMetaStore::new()))
-        },
-        StorageType::Redis => {
-            log::info!("Using Redis meta store");
-            let redis_urls = server_config.meta_store_redis_urls
-                .unwrap_or_default()
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .collect::<Vec<String>>();
-            let redis_client: RedisClient = if redis_urls.len() > 1 {
-                log::info!("Using Redis Cluster with URLs: {:?}", redis_urls);
-                let client = ClusterClient::new(redis_urls)?;
-                let conn = client.get_async_connection().await?;
-                RedisClient::new(true, Some(Arc::new(Mutex::new(conn))), None)
-            } else {
-                log::info!("Using single Redis instance at: {}", redis_urls[0]);
-                let client = redis::Client::open(redis_urls[0].clone())?;
-                let conn = client.get_multiplexed_async_connection().await?;
-                RedisClient::new(false, None, Some(Arc::new(Mutex::new(conn))))
-            };
-            Arc::new(MetaStoreImpl::Redis(RedisMetaStore::new(redis_client)))
-        }
-    };
-
-    let log_store_load = match &server_config.log_store_type {
-        StorageType::S3 => {
-            log::info!("Using S3 log store");
-            let bucket = server_config.log_store_s3_bucket.clone().ok_or_else(|| anyhow::anyhow!("S3 bucket not configured"))?;
-            let prefix = server_config.log_store_s3_prefix.clone();
-            let endpoint = server_config.log_store_s3_endpoint.clone().unwrap_or_else(|| "https://s3.amazonaws.com".to_string());
-            let access_key = server_config.log_store_s3_access_key.clone().ok_or_else(|| anyhow::anyhow!("S3 access key not configured"))?;
-            let secret_key = server_config.log_store_s3_secret_key.clone().ok_or_else(|| anyhow::anyhow!("S3 secretkey not configured"))?;
-            let region = server_config.log_store_s3_region.clone().unwrap_or_else(|| "us-east-1".to_string());
-            let s3_client = S3Client::new(&endpoint, &access_key, &secret_key, &region).await?;
-            Arc::new(LogStoreImpl::S3(S3LogStore::new(s3_client, bucket, prefix)))
-        },
-        StorageType::File => {
-            log::info!("Using File log store");
-            Arc::new(LogStoreImpl::File(FileLogStore::new()))
-        },
-        _ => {
-            return Err(anyhow::anyhow!("Unsupported log store backend"));
-        }
-    };
-
-    let index_store_load = match &server_config.index_store_type {
-        StorageType::Redis => {
-            log::info!("Using Redis index store");
-            let redis_urls = server_config.index_store_redis_urls
-                .unwrap_or_default()
-                .split(',')
-                .map(|s| s.trim().to_string())
-                .collect::<Vec<String>>();
-            let redis_client: RedisClient = if redis_urls.len() > 1 {
-                log::info!("Using Redis Cluster with URLs: {:?}", redis_urls);
-                let client = ClusterClient::new(redis_urls)?;
-                let conn = client.get_async_connection().await?;
-                RedisClient::new(true, Some(Arc::new(Mutex::new(conn))), None)
-            } else {
-                log::info!("Using single Redis instance at: {}", redis_urls[0]);
-                let client = redis::Client::open(redis_urls[0].clone())?;
-                let conn = client.get_multiplexed_async_connection().await?;
-                RedisClient::new(false, None, Some(Arc::new(Mutex::new(conn))))
-            };
-            Arc::new(IndexStoreImpl::Redis(RedisIndexStore::new(redis_client)))
-        },
-        _ => {
-            return Err(anyhow::anyhow!("Unsupported index store backend"));
-        }
-    };
+    let meta_store_load = load_meta_store(&server_config).await?; 
+    let log_store_load = load_log_store(&server_config).await?;
+    let index_store_load: Arc<IndexStoreImpl> = load_index_store(&server_config).await?;
     
     loop {
         let (stream, addr) = listener.accept().await?;
