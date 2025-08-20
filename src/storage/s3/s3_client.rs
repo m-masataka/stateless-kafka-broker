@@ -12,7 +12,7 @@ pub struct S3Client {
 
 impl S3Client {
     pub async fn new(endpoint: &str, access_key: &str, secret_key: &str, region: &str) -> Result<Self> {
-        log::info!("Creating S3 client with endpoint: {}, region: {}", endpoint, region);
+        log::debug!("Creating S3 client with endpoint: {}, region: {}", endpoint, region);
         let credentials = Credentials::new(access_key.to_string(), secret_key.to_string(), None, None, "custom");
         let config = aws_sdk_s3::config::Builder::new()
             .behavior_version_latest()

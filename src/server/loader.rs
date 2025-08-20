@@ -23,7 +23,7 @@ use crate::common::config::ServerConfig;
 pub async fn load_log_store(server_config: &ServerConfig) -> Result<LogStoreImpl> {
     let log_store_load = match &server_config.log_store_type {
         StorageType::S3 => {
-            log::info!("Using S3 log store");
+            log::debug!("Using S3 log store");
             let bucket = server_config.log_store_s3_bucket.clone().ok_or_else(|| anyhow::anyhow!("S3 bucket not configured"))?;
             let prefix = server_config.log_store_s3_prefix.clone();
             let endpoint = server_config.log_store_s3_endpoint.clone().unwrap_or_else(|| "https://s3.amazonaws.com".to_string());
@@ -34,7 +34,7 @@ pub async fn load_log_store(server_config: &ServerConfig) -> Result<LogStoreImpl
             LogStoreImpl::S3(S3LogStore::new(s3_client, bucket, prefix))
         },
         StorageType::File => {
-            log::info!("Using File log store");
+            log::debug!("Using File log store");
             LogStoreImpl::File(FileLogStore::new())
         },
         _ => {
@@ -47,19 +47,19 @@ pub async fn load_log_store(server_config: &ServerConfig) -> Result<LogStoreImpl
 pub async fn load_index_store(server_config: &ServerConfig) -> Result<IndexStoreImpl> {
     let index_store_load: IndexStoreImpl = match &server_config.index_store_type {
         StorageType::Redis => {
-            log::info!("Using Redis index store");
+            log::debug!("Using Redis index store");
             let redis_urls = server_config.index_store_redis_urls.clone()
                 .unwrap_or_default()
                 .split(',')
                 .map(|s| s.trim().to_string())
                 .collect::<Vec<String>>();
             let redis_client: RedisClient = if redis_urls.len() > 1 {
-                log::info!("Using Redis Cluster with URLs: {:?}", redis_urls);
+                log::debug!("Using Redis Cluster with URLs: {:?}", redis_urls);
                 let client = ClusterClient::new(redis_urls)?;
                 let conn = client.get_async_connection().await?;
                 RedisClient::new(true, Some(Arc::new(Mutex::new(conn))), None)
             } else {
-                log::info!("Using single Redis instance at: {}", redis_urls[0]);
+                log::debug!("Using single Redis instance at: {}", redis_urls[0]);
                 let client = redis::Client::open(redis_urls[0].clone())?;
                 let conn = client.get_multiplexed_async_connection().await?;
                 RedisClient::new(false, None, Some(Arc::new(Mutex::new(conn))))
@@ -76,7 +76,7 @@ pub async fn load_index_store(server_config: &ServerConfig) -> Result<IndexStore
 pub async fn load_meta_store(server_config: &ServerConfig) -> Result<MetaStoreImpl> {
     let meta_store_load =  match &server_config.meta_store_type {
         StorageType::S3 => {
-            log::info!("Using S3 meta store");
+            log::debug!("Using S3 meta store");
             let bucket = server_config.meta_store_s3_bucket.clone().ok_or_else(|| anyhow::anyhow!("S3 bucket not configured"))?;
             let prefix = server_config.meta_store_s3_prefix.clone();
             let endpoint = server_config.meta_store_s3_endpoint.clone().unwrap_or_else(|| "https://s3.amazonaws.com".to_string());
@@ -90,7 +90,7 @@ pub async fn load_meta_store(server_config: &ServerConfig) -> Result<MetaStoreIm
             MetaStoreImpl::File(FileMetaStore::new())
         },
         StorageType::Redis => {
-            log::info!("Using Redis meta store");
+            log::debug!("Using Redis meta store");
             let redis_urls = server_config.meta_store_redis_urls
                 .as_ref()
                 .cloned()
@@ -99,12 +99,12 @@ pub async fn load_meta_store(server_config: &ServerConfig) -> Result<MetaStoreIm
                 .map(|s| s.trim().to_string())
                 .collect::<Vec<String>>();
             let redis_client: RedisClient = if redis_urls.len() > 1 {
-                log::info!("Using Redis Cluster with URLs: {:?}", redis_urls);
+                log::debug!("Using Redis Cluster with URLs: {:?}", redis_urls);
                 let client = ClusterClient::new(redis_urls)?;
                 let conn = client.get_async_connection().await?;
                 RedisClient::new(true, Some(Arc::new(Mutex::new(conn))), None)
             } else {
-                log::info!("Using single Redis instance at: {}", redis_urls[0]);
+                log::debug!("Using single Redis instance at: {}", redis_urls[0]);
                 let client = redis::Client::open(redis_urls[0].clone())?;
                 let conn = client.get_multiplexed_async_connection().await?;
                 RedisClient::new(false, None, Some(Arc::new(Mutex::new(conn))))

@@ -58,6 +58,10 @@ pub struct ServerConfig {
 
     pub index_store_type: StorageType, // "file", "s3", "redis"
     pub index_store_redis_urls: Option<String>, // "redis://redis-1:7001,redis://redis-2:7002"
+
+    pub tcp_send_buffer_bytes: Option<usize>,
+    pub tcp_recv_buffer_bytes: Option<usize>,
+    pub tcp_nodelay: Option<bool>,
 }
 
 pub fn load_server_config() -> Result<ServerConfig> {
