@@ -21,11 +21,16 @@ use crate::handler::{
 };
 use crate::common::config::{load_cluster_config, load_server_config, ClusterConfig};
 use anyhow::{Ok, Result};
-use tokio::sync::mpsc;
+use nix::sys::socket::{setsockopt, sockopt};
+use tokio::{
+    net::TcpStream,
+    sync::mpsc,
+    io::AsyncReadExt,
+};
+
 use std::{
     sync::Arc,
 };
-use tokio::io::AsyncReadExt;
 
 use kafka_protocol::messages::{
     RequestKind,
@@ -63,6 +68,32 @@ pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
     
     loop {
         let (stream, addr) = listener.accept().await?;
+
+        let std_stream = stream.into_std()?;  // Tokio → std
+        // Set socket options
+        if let Some(send_buf) = server_config_load.tcp_send_buffer_bytes {
+            setsockopt(&std_stream, sockopt::SndBuf, &send_buf)
+                .map_err(|e| anyhow::anyhow!("Failed to set SO_SNDBUF: {:?}", e))?;
+        }
+
+        if let Some(recv_buf) = server_config_load.tcp_recv_buffer_bytes {
+            setsockopt(&std_stream, sockopt::RcvBuf, &recv_buf)
+                .map_err(|e| anyhow::anyhow!("Failed to set SO_RCVBUF: {:?}", e))?;
+        }
+
+        if server_config_load.tcp_nodelay.unwrap_or(true) {
+            std_stream
+                .set_nodelay(true)
+                .map_err(|e| anyhow::anyhow!("Failed to set TCP_NODELAY: {:?}", e))?;
+        }
+
+        // Convert std::net::TcpStream back to tokio::net::TcpStream
+        let stream = TcpStream::from_std(std_stream)?;
+
+
+        if let Err(e) = stream.set_nodelay(true) {
+            log::warn!("Failed to set TCP_NODELAY: {:?}", e);
+        }
         log::info!("Accepted connection from {:?}", addr);
         let cluster_config = cluster_conf_load.clone();
         let server_config = server_config_load.clone();
