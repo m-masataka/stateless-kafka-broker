@@ -1,6 +1,5 @@
 use bytes::Bytes;
 use kafka_protocol::protocol::StrBytes;
-use tokio::io::AsyncWrite;
 use anyhow::Result;
 use kafka_protocol::messages::{
     consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
@@ -8,18 +7,17 @@ use kafka_protocol::messages::{
     RequestHeader,
 };
 use kafka_protocol::error::ResponseError::UnknownServerError;
-use crate::{common::response::send_kafka_response, storage::meta_store_impl::MetaStoreImpl, traits::meta_store::MetaStore};
+use crate::{common::response::send_kafka_response, traits::meta_store::MetaStore};
 use kafka_protocol::protocol::Decodable;
+use crate::handler::context::HandlerContext;
 
-pub async fn handle_consumer_group_heartbeat_request<W>(
-    stream: &mut W,
+pub async fn handle_consumer_group_heartbeat_request(
     header: &RequestHeader,
     request: &ConsumerGroupHeartbeatRequest,
-    meta_store: &MetaStoreImpl,
-) -> Result<()>
-where
-    W: AsyncWrite + Unpin + Send,
+    handler_ctx: &HandlerContext,
+) -> Result<Vec<u8>>
 {
+    let meta_store = handler_ctx.meta_store.clone();
     log::info!("Handling ConsumerGroupHeartbeatRequest API VERSION {}", header.request_api_version);
     log::debug!("ConsumerGroupHeartbeatRequest: {:?}", request);
 
@@ -77,9 +75,8 @@ where
     };
 
     log::debug!("ConsumerGroupHeartbeatResponse: {:?}", response);
-    send_kafka_response(stream, header, &response).await?;
     log::info!("Sent ConsumerGroupHeartbeatResponse");
-    Ok(())
+    send_kafka_response(header, &response).await
 }
 
 fn bytes_to_assigment(bytes: Option<&Bytes>, version: i16) -> Result<Option<Assignment>>{

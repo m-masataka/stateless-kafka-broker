@@ -1,4 +1,3 @@
-use tokio::io::AsyncWrite;
 use anyhow::Result;
 use kafka_protocol::messages::{
     RequestHeader,
@@ -6,21 +5,21 @@ use kafka_protocol::messages::{
     leave_group_response::{LeaveGroupResponse, MemberResponse},
 };
 
-use crate::{common::response::send_kafka_response, storage::meta_store_impl::MetaStoreImpl};
+use crate::common::response::send_kafka_response;
 use crate::traits::meta_store::MetaStore;
+use crate::handler::context::HandlerContext;
 
 
-pub async fn handle_leave_group_request<W>(
-    stream: &mut W,
+pub async fn handle_leave_group_request(
     header: &RequestHeader,
     request: &LeaveGroupRequest,
-    meta_store: &MetaStoreImpl,
-) -> Result<()>
-where
-    W: AsyncWrite + Unpin + Send,
+    handler_ctx: &HandlerContext,
+) -> Result<Vec<u8>>
 {
     log::info!("Handling LeaveGroupRequest API VERSION {}", header.request_api_version);
     log::debug!("LeaveGroupRequest: {:?}", request);
+
+    let meta_store = handler_ctx.meta_store.clone();
     let mut response = LeaveGroupResponse::default();
     if request.member_id.is_empty() {
         // if version 5-8, use members for leave
@@ -60,7 +59,6 @@ where
     response.throttle_time_ms = 0;
 
     log::debug!("LeaveGroupResponse: {:?}", response);
-    send_kafka_response(stream, header, &response).await?;
     log::debug!("Handled LeaveGroupRequest successfully");
-    Ok(())
+    send_kafka_response(header, &response).await
 }

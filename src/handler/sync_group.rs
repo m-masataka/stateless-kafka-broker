@@ -1,6 +1,4 @@
 use std::time::SystemTime;
-
-use tokio::io::AsyncWrite;
 use anyhow::Result;
 use kafka_protocol::messages::sync_group_request::SyncGroupRequest;
 use kafka_protocol::messages::RequestHeader;
@@ -12,23 +10,21 @@ use kafka_protocol::error::ResponseError;
 
 use crate::common::consumer::ConsumerGroupMember;
 use crate::common::response::send_kafka_response;
-use crate::storage::meta_store_impl::MetaStoreImpl;
 use crate::traits::meta_store::MetaStore;
+use crate::handler::context::HandlerContext;
 use bytes::Bytes;
 
 
-pub async fn handle_sync_group_request<W>(
-    stream: &mut W,
+pub async fn handle_sync_group_request(
     header: &RequestHeader,
     request: &SyncGroupRequest,
-    meta_store: &MetaStoreImpl,
-) -> Result<()> 
-where
-    W: AsyncWrite + Unpin + Send,
+    handler_ctx: &HandlerContext,
+) -> Result<Vec<u8>>
 {
     log::info!("Handling SyncGroupRequest API VERSION {}", header.request_api_version);
     log::debug!("SyncGroupRequest: {:?}", request);
 
+    let meta_store = handler_ctx.meta_store.clone();
     // get consumer group
     let group_id = request.group_id.clone();
     let consumer_group = meta_store.get_consumer_group(group_id.as_str()).await?;
@@ -90,7 +86,6 @@ where
 
 
     log::debug!("SyncGroupResponse: {:?}", response);
-    send_kafka_response(stream, header, &response).await?;
     log::debug!("Sent SyncGroupResponse");
-    Ok(())
+    send_kafka_response(header, &response).await
 }

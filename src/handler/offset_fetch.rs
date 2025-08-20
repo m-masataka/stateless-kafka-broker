@@ -1,4 +1,3 @@
-use tokio::io::AsyncWrite;
 use anyhow::{Error, Result};
 use kafka_protocol::messages::{
     offset_fetch_request::{
@@ -12,19 +11,18 @@ use kafka_protocol::messages::{
 use kafka_protocol::protocol::StrBytes;
 use crate::{common::response::send_kafka_response, storage::meta_store_impl::MetaStoreImpl};
 use crate::traits::meta_store::MetaStore;
+use crate::handler::context::HandlerContext;
 
-
-pub async fn handle_offset_fetch_request<W>(
-    stream: &mut W,
+pub async fn handle_offset_fetch_request(
     header: &RequestHeader,
     request: &OffsetFetchRequest,
-    meta_store: &MetaStoreImpl,
-) -> Result<()> 
-where
-    W: AsyncWrite + Unpin + Send,
+    handler_ctx: &HandlerContext,
+) -> Result<Vec<u8>>
 {
     log::info!("Handling OffsetFetchRequest API VERSION {}", header.request_api_version);
     log::debug!("OffsetFetchRequest: {:?}", request);
+
+    let meta_store = handler_ctx.meta_store.clone();
     // let mut response = OffsetFetchResponse::default();
     let response = if request.group_id.is_empty() {
         log::debug!("Group ID is empty in OffsetFetchRequest");
@@ -32,21 +30,20 @@ where
         let mut offset_fetch_response = OffsetFetchResponse::default();
         let mut offset_responses = Vec::new();
         for group in &request.groups {
-            offset_responses.push(build_response_group(meta_store, group).await);
+            offset_responses.push(build_response_group(&meta_store, group).await);
         }
         offset_fetch_response.groups = offset_responses;
         offset_fetch_response.throttle_time_ms = 0;
         offset_fetch_response
     } else {
         log::debug!("Group ID is provided in OffsetFetchRequest: {}", request.group_id.as_str());
-        build_response_with_group_id(meta_store, request).await?
+        build_response_with_group_id(&meta_store, request).await?
     };
 
     // レスポンスをエンコードして送信
     log::debug!("OffsetFetchResponse: {:?}", response);
-    send_kafka_response(stream, header, &response).await?;
     log::debug!("Sent OffsetFetchResponse");
-    Ok(())
+    send_kafka_response(header, &response).await
 }
 
 

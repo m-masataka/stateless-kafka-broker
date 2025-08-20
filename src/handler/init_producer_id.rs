@@ -1,4 +1,3 @@
-use tokio::io::AsyncWrite;
 use anyhow::Result;
 use kafka_protocol::messages::RequestHeader;
 use kafka_protocol::messages::init_producer_id_response::{
@@ -11,21 +10,20 @@ use kafka_protocol::messages::ProducerId;
 use kafka_protocol::error::ResponseError::UnknownServerError;
 
 use crate::common::response::send_kafka_response;
-use crate::storage::meta_store_impl::MetaStoreImpl;
 use crate::traits::meta_store::MetaStore;
+use crate::handler::context::HandlerContext;
 
 
 
-pub async fn handle_init_producer_id_request<W>(
-    stream: &mut W,
+pub async fn handle_init_producer_id_request(
     header: &RequestHeader,
     _request: &InitProducerIdRequest,
-    meta_store: &MetaStoreImpl,
-) -> Result<()>
-where
-    W: AsyncWrite + Unpin + Send,
+    handler_ctx: &HandlerContext,
+) -> Result<Vec<u8>>
 {
     log::info!("Handling InitProducerId {}", header.request_api_version);
+
+    let meta_store = handler_ctx.meta_store.clone();
     let response = match meta_store.gen_producer_id().await {
         Ok(producer_id) => {
             log::info!("Generated Producer ID: {}", producer_id);
@@ -45,7 +43,6 @@ where
     };
 
     log::debug!("InitProducerIdResponse: {:?}", response);
-    send_kafka_response(stream, header, &response).await?;
     log::debug!("Sent InitProducerIdResponse");
-    Ok(())
+    send_kafka_response(header, &response).await
 }

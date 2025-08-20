@@ -1,4 +1,3 @@
-use tokio::io::AsyncWrite;
 use anyhow::Result;
 use kafka_protocol::messages::{
     offset_commit_request::{
@@ -12,20 +11,20 @@ use kafka_protocol::messages::{
     RequestHeader,
 };
 use kafka_protocol::error::ResponseError::UnknownServerError;
-use crate::{storage::meta_store_impl::MetaStoreImpl, traits::meta_store::MetaStore};
+use crate::traits::meta_store::MetaStore;
 use crate::common::response::send_kafka_response;
+use crate::handler::context::HandlerContext;
 
-pub async fn handle_offset_commit_request<W>(
-    stream: &mut W,
+pub async fn handle_offset_commit_request(
     header: &RequestHeader,
     request: &OffsetCommitRequest,
-    meta_store: &MetaStoreImpl,
-) -> Result<()> 
-where
-    W: AsyncWrite + Unpin + Send,
+    handler_ctx: &HandlerContext,
+) -> Result<Vec<u8>>
 {
     log::info!("Handling OffsetCommitRequest API VERSION {}", header.request_api_version);
     log::debug!("OffsetCommitRequest: {:?}", request);
+
+    let meta_store = handler_ctx.meta_store.clone();
     // update heartbeat for the consumer group
     match meta_store.update_heartbeat(request.group_id.as_str()).await {
         Ok(g) => g,
@@ -81,7 +80,7 @@ where
     }
     response.topics = topic_responses;
     response.throttle_time_ms = 0;
-    send_kafka_response(stream, header, &response).await?;
+
     log::debug!("Sent OffsetCommitResponse: {:?}", response);
-    Ok(())
+    send_kafka_response(header, &response).await
 }

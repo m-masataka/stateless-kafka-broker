@@ -1,8 +1,8 @@
 use crate::server::loader::{load_index_store, load_log_store, load_meta_store};
-use crate::storage::index_store_impl::IndexStoreImpl;
 use crate::common::config::ServerConfig;
 
 use crate::handler::{
+    context::HandlerContext,
     api_versions::handle_api_versions_request,
     metadata::handle_metadata_request,
     heartbeat::handle_heartbeat_request,
@@ -20,9 +20,8 @@ use crate::handler::{
     consumer_group_heartbeat::handle_consumer_group_heartbeat_request,
 };
 use crate::common::config::{load_cluster_config, load_server_config, ClusterConfig};
-use crate::storage::log_store_impl::LogStoreImpl;
-use crate::storage::meta_store_impl::MetaStoreImpl;
-use anyhow::Result;
+use anyhow::{Ok, Result};
+use tokio::sync::mpsc;
 use std::{
     sync::Arc,
 };
@@ -49,6 +48,7 @@ use kafka_protocol::messages::{
     consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
 };
 use kafka_protocol::protocol::Decodable;
+use tokio::io::AsyncWriteExt;
 
 pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
     env_logger::init();
@@ -76,17 +76,35 @@ pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
     }
 }
 
-async fn handle_connection(mut stream: tokio::net::TcpStream, 
+async fn handle_connection(stream: tokio::net::TcpStream, 
     cluster_config: Arc<ClusterConfig>,
     server_config: Arc<ServerConfig>,
 ) -> Result<()> {
-    let meta_store: MetaStoreImpl = load_meta_store(&server_config).await?; 
-    let log_store: LogStoreImpl = load_log_store(&server_config).await?;
-    let index_store: IndexStoreImpl= load_index_store(&server_config).await?;
+    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>(); // any request → writer
+
+    // spawn writer task
+    let (mut reader, mut writer) = tokio::io::split(stream);
+    tokio::spawn(async move {
+        while let Some(response_bytes) = rx.recv().await {
+            log::debug!("Sending response of length: {}", response_bytes.len());
+            if let Err(e) = writer.write_all(&response_bytes).await {
+                log::error!("Failed to write response: {:?}", e);
+                break;
+            }
+            writer.flush().await.unwrap_or_else(|e| {
+                log::error!("Failed to flush writer: {:?}", e);
+            });
+            log::debug!("Response sent successfully");
+        }
+    });
+
+
+
+
     loop {
         // Read length prefix
         let mut length_buf = [0u8; 4];
-        if let Err(e) = stream.read_exact(&mut length_buf).await {
+        if let Err(e) = reader.read_exact(&mut length_buf).await {
             if e.kind() == std::io::ErrorKind::UnexpectedEof {
                 log::info!("Client disconnected gracefully");
                 return Ok(());
@@ -98,142 +116,214 @@ async fn handle_connection(mut stream: tokio::net::TcpStream,
         let total_len = u32::from_be_bytes(length_buf);
         // Read full request
         let mut buffer = vec![0u8; total_len as usize];
-        stream.read_exact(&mut buffer).await?;
+        reader.read_exact(&mut buffer).await?;
 
-        let mut peek = std::io::Cursor::new(&buffer);
-        let api_key = AsyncReadExt::read_i16(&mut peek).await?;
-        let api_version = AsyncReadExt::read_i16(&mut peek).await?;
-        let header_version = ApiKey::try_from(api_key).unwrap().request_header_version(api_version);
+        let tx = tx.clone();
+        let server_config = server_config.clone();
+        let cluster_config = cluster_config.clone();
 
-        let mut buf = std::io::Cursor::new(&buffer);
-        let header = RequestHeader::decode(&mut buf, header_version).unwrap();
-        let api_key = ApiKey::try_from(header.request_api_key).unwrap();
-        log::debug!(
-            "api_key {:?}, api_version {}, header_version {}, correlation_id {:?}",
-            api_key, api_version, header_version, header.correlation_id
-        );
-        match api_key {
-            ApiKey::ApiVersions => {
-                log::debug!("ApiVersion Request");
-                if let RequestKind::ApiVersions(ref req) =
-                    RequestKind::ApiVersions(ApiVersionsRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
-                    handle_api_versions_request(&mut stream, &header, req).await?;
+        tokio::spawn(async move {
+            let mut peek = std::io::Cursor::new(&buffer);
+            let api_key = AsyncReadExt::read_i16(&mut peek).await.unwrap();
+            let api_version = AsyncReadExt::read_i16(&mut peek).await.unwrap();
+            let header_version = ApiKey::try_from(api_key).unwrap().request_header_version(api_version);
+
+            let mut buf = std::io::Cursor::new(&buffer);
+            let header = RequestHeader::decode(&mut buf, header_version).unwrap();
+            let api_key = ApiKey::try_from(header.request_api_key).unwrap();
+            log::debug!(
+                "api_key {:?}, api_version {}, header_version {}, correlation_id {:?}",
+                api_key, api_version, header_version, header.correlation_id
+            );
+
+            let meta_store = Arc::new(load_meta_store(&server_config).await.unwrap());
+            let log_store = Arc::new(load_log_store(&server_config).await.unwrap());
+            let index_store = Arc::new(load_index_store(&server_config).await.unwrap());
+            let handler_ctx = HandlerContext {
+                log_store,
+                meta_store,
+                index_store,
+                cluster_config: cluster_config.clone(),
+            };
+
+            let reponse = match api_key {
+                ApiKey::ApiVersions => {
+                    log::debug!("ApiVersion Request");
+                    if let RequestKind::ApiVersions(ref req) =
+                        RequestKind::ApiVersions(ApiVersionsRequest::decode(&mut buf, header.request_api_version).unwrap())
+                    {
+                        handle_api_versions_request(&header, req, &handler_ctx).await
+                    } else {
+                        log::error!("Failed to decode ApiVersionsRequest");
+                        Err(anyhow::anyhow!("Failed to decode ApiVersionsRequest"))
+                    }
                 }
-            }
-            ApiKey::Metadata => {
-                log::debug!("Metadata Request");
-                if let RequestKind::Metadata(ref req) =
-                    RequestKind::Metadata(MetadataRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
-                    handle_metadata_request(&mut stream, &header, req, &cluster_config, &meta_store).await?;
+                ApiKey::Metadata => {
+                    log::debug!("Metadata Request");
+                    if let RequestKind::Metadata(ref req) =
+                        RequestKind::Metadata(MetadataRequest::decode(&mut buf, header.request_api_version).unwrap())
+                    {
+                        handle_metadata_request(&header, req, &handler_ctx).await
+                    } else {
+                        log::error!("Failed to decode MetadataRequest");
+                        Err(anyhow::anyhow!("Failed to decode MetadataRequest"))
+                    }
                 }
-            }
-            ApiKey::DeleteTopics => {
-                log::debug!("DeleteTopics Request");
-                if let RequestKind::DeleteTopics(ref req) =
-                    RequestKind::DeleteTopics(DeleteTopicsRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
-                    handle_delete_topics_request(&mut stream, &header, req, &meta_store).await?;
+                ApiKey::DeleteTopics => {
+                    log::debug!("DeleteTopics Request");
+                    if let RequestKind::DeleteTopics(ref req) =
+                        RequestKind::DeleteTopics(DeleteTopicsRequest::decode(&mut buf, header.request_api_version).unwrap())
+                    {
+                        handle_delete_topics_request(&header, req, &handler_ctx).await
+                    } else {
+                        log::error!("Failed to decode DeleteTopicsRequest");
+                        Err(anyhow::anyhow!("Failed to decode DeleteTopicsRequest"))
+                    }
                 }
-            }
-            ApiKey::FindCoordinator => {
-                log::debug!("FindCoordinator Request");
-                if let RequestKind::FindCoordinator(ref req) =
-                    RequestKind::FindCoordinator(FindCoordinatorRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
-                    handle_find_coordinator_request(&mut stream, &header, req, &cluster_config).await?;
+                ApiKey::FindCoordinator => {
+                    log::debug!("FindCoordinator Request");
+                    if let RequestKind::FindCoordinator(ref req) =
+                        RequestKind::FindCoordinator(FindCoordinatorRequest::decode(&mut buf, header.request_api_version).unwrap())
+                    {
+                        handle_find_coordinator_request(&header, req, &handler_ctx).await
+                    } else {
+                        log::error!("Failed to decode FindCoordinatorRequest");
+                        Err(anyhow::anyhow!("Failed to decode FindCoordinatorRequest"))
+                    }
                 }
-            }
-            ApiKey::JoinGroup => {
-                log::debug!("JoinGroup Request");
-                if let RequestKind::JoinGroup(ref req) =
-                    RequestKind::JoinGroup(JoinGroupRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
-                    handle_join_group_request(&mut stream, &header, req, &meta_store).await?;
+                ApiKey::JoinGroup => {
+                    log::debug!("JoinGroup Request");
+                    if let RequestKind::JoinGroup(ref req) =
+                        RequestKind::JoinGroup(JoinGroupRequest::decode(&mut buf, header.request_api_version).unwrap())
+                    {
+                        handle_join_group_request(&header, req, &handler_ctx).await
+                    } else {
+                        log::error!("Failed to decode JoinGroupRequest");
+                        Err(anyhow::anyhow!("Failed to decode JoinGroupRequest"))
+                    }
                 }
-            }
-            ApiKey::LeaveGroup => {
-                log::debug!("LeaveGroup Request");
-                if let RequestKind::LeaveGroup(ref req) =
-                    RequestKind::LeaveGroup(LeaveGroupRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
-                    handle_leave_group_request(&mut stream, &header, req, &meta_store).await?;
+                ApiKey::LeaveGroup => {
+                    log::debug!("LeaveGroup Request");
+                    if let RequestKind::LeaveGroup(ref req) =
+                        RequestKind::LeaveGroup(LeaveGroupRequest::decode(&mut buf, header.request_api_version).unwrap())
+                    {
+                        handle_leave_group_request(&header, req, &handler_ctx).await
+                    } else {
+                        log::error!("Failed to decode LeaveGroupRequest");
+                        Err(anyhow::anyhow!("Failed to decode LeaveGroupRequest"))
+                    }
                 }
-            }
-            ApiKey::SyncGroup => {
-                log::debug!("SyncGroup Request");
-                if let RequestKind::SyncGroup(ref req) =
-                    RequestKind::SyncGroup(SyncGroupRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
-                    handle_sync_group_request(&mut stream, &header, req, &meta_store).await?;
+                ApiKey::SyncGroup => {
+                    log::debug!("SyncGroup Request");
+                    if let RequestKind::SyncGroup(ref req) =
+                        RequestKind::SyncGroup(SyncGroupRequest::decode(&mut buf, header.request_api_version).unwrap())
+                    {
+                        handle_sync_group_request(&header, req, &handler_ctx).await
+                    } else {
+                        log::error!("Failed to decode SyncGroupRequest");
+                        Err(anyhow::anyhow!("Failed to decode SyncGroupRequest"))
+                    }
                 }
-            }
-            ApiKey::OffsetCommit => {
-                log::debug!("OffsetCommit Request");
-                if let RequestKind::OffsetCommit(ref req) =
-                    RequestKind::OffsetCommit(OffsetCommitRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
-                    handle_offset_commit_request(&mut stream, &header, req, &meta_store).await?;
+                ApiKey::OffsetCommit => {
+                    log::debug!("OffsetCommit Request");
+                    if let RequestKind::OffsetCommit(ref req) =
+                        RequestKind::OffsetCommit(OffsetCommitRequest::decode(&mut buf, header.request_api_version).unwrap())
+                    {
+                        handle_offset_commit_request(&header, req, &handler_ctx).await
+                    } else {
+                        log::error!("Failed to decode OffsetCommitRequest");
+                        Err(anyhow::anyhow!("Failed to decode OffsetCommitRequest"))
+                    }
                 }
-            }
-            ApiKey::InitProducerId => {
-                log::debug!("InitProducerId Request");
-                if let RequestKind::InitProducerId(ref req) =
-                    RequestKind::InitProducerId(InitProducerIdRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
-                    handle_init_producer_id_request(&mut stream, &header, req, &meta_store).await?;
+                ApiKey::InitProducerId => {
+                    log::debug!("InitProducerId Request");
+                    if let RequestKind::InitProducerId(ref req) =
+                        RequestKind::InitProducerId(InitProducerIdRequest::decode(&mut buf, header.request_api_version).unwrap())
+                    {
+                        handle_init_producer_id_request(&header, req, &handler_ctx).await
+                    } else {
+                        log::error!("Failed to decode InitProducerIdRequest");
+                        Err(anyhow::anyhow!("Failed to decode InitProducerIdRequest"))
+                    }
                 }
-            }
-            ApiKey::OffsetFetch => {
-                log::debug!("OffsetFetch Request");
-                if let RequestKind::OffsetFetch(ref req) =
-                    RequestKind::OffsetFetch(OffsetFetchRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
-                    handle_offset_fetch_request(&mut stream, &header, req, &meta_store).await?;
+                ApiKey::OffsetFetch => {
+                    log::debug!("OffsetFetch Request");
+                    if let RequestKind::OffsetFetch(ref req) =
+                        RequestKind::OffsetFetch(OffsetFetchRequest::decode(&mut buf, header.request_api_version).unwrap())
+                    {
+                        handle_offset_fetch_request(&header, req, &handler_ctx).await
+                    } else {
+                        log::error!("Failed to decode OffsetFetchRequest");
+                        Err(anyhow::anyhow!("Failed to decode OffsetFetchRequest"))
+                    }
+                },
+                ApiKey::Fetch => {
+                    log::debug!("Fetch Request");
+                    if let RequestKind::Fetch(ref req) =
+                        RequestKind::Fetch(FetchRequest::decode(&mut buf, header.request_api_version).unwrap())
+                    {
+                        handle_fetch_request(&header, req, &handler_ctx).await
+                    } else {
+                        log::error!("Failed to decode FetchRequest");
+                        Err(anyhow::anyhow!("Failed to decode FetchRequest"))
+                    }
+                },
+                ApiKey::Produce => {
+                    log::debug!("Produce Request");
+                    if let RequestKind::Produce(ref req) =
+                        RequestKind::Produce(ProduceRequest::decode(&mut buf, header.request_api_version).unwrap())
+                    {
+                        handle_produce_request(&header, req, &handler_ctx).await
+                    } else {
+                        log::error!("Failed to decode ProduceRequest");
+                        Err(anyhow::anyhow!("Failed to decode ProduceRequest"))
+                    }
                 }
-            },
-            ApiKey::Fetch => {
-                log::debug!("Fetch Request");
-                if let RequestKind::Fetch(ref req) =
-                    RequestKind::Fetch(FetchRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
-                    handle_fetch_request(&mut stream, &header, req, &log_store, &meta_store, &index_store).await?;
+                ApiKey::CreateTopics => {
+                    log::debug!("CreateTopics Request");
+                    if let RequestKind::CreateTopics(ref req) =
+                        RequestKind::CreateTopics(CreateTopicsRequest::decode(&mut buf, header.request_api_version).unwrap())
+                    {
+                        handle_create_topics_request(&header, req, &handler_ctx).await
+                    } else {
+                        log::error!("Failed to decode CreateTopicsRequest");
+                        Err(anyhow::anyhow!("Failed to decode CreateTopicsRequest"))
+                    }
                 }
-            },
-            ApiKey::Produce => {
-                log::debug!("Produce Request");
-                if let RequestKind::Produce(ref req) =
-                    RequestKind::Produce(ProduceRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
-                    handle_produce_request(&mut stream, &header, req, &cluster_config, &meta_store, &log_store, &index_store).await?;
+                ApiKey::ConsumerGroupHeartbeat => {
+                    log::debug!("ConsumerGroupHeartbeat Request");
+                    if let RequestKind::ConsumerGroupHeartbeat(ref req) =
+                        RequestKind::ConsumerGroupHeartbeat(ConsumerGroupHeartbeatRequest::decode(&mut buf, header.request_api_version).unwrap())
+                    {
+                        handle_consumer_group_heartbeat_request(&header, req, &handler_ctx).await
+                    } else {
+                        log::error!("Failed to decode ConsumerGroupHeartbeatRequest");
+                        Err(anyhow::anyhow!("Failed to decode ConsumerGroupHeartbeatRequest"))
+                    }
                 }
-            }
-            ApiKey::CreateTopics => {
-                log::debug!("CreateTopics Request");
-                if let RequestKind::CreateTopics(ref req) =
-                    RequestKind::CreateTopics(CreateTopicsRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
-                    handle_create_topics_request(&mut stream, &header, req, &meta_store).await?;
+                ApiKey::Heartbeat =>  {
+                    log::debug!("Heartbeat Request");
+                    if let RequestKind::Heartbeat(ref req) =
+                        RequestKind::Heartbeat(HeartbeatRequest::decode(&mut buf, header.request_api_version).unwrap())
+                    {
+                        handle_heartbeat_request(&header,req, &handler_ctx).await
+                    } else {
+                        log::error!("Failed to decode HeartbeatRequest");
+                        Err(anyhow::anyhow!("Failed to decode HeartbeatRequest"))
+                    }
                 }
-            }
-            ApiKey::ConsumerGroupHeartbeat => {
-                log::debug!("ConsumerGroupHeartbeat Request");
-                if let RequestKind::ConsumerGroupHeartbeat(ref req) =
-                    RequestKind::ConsumerGroupHeartbeat(ConsumerGroupHeartbeatRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
-                    handle_consumer_group_heartbeat_request(&mut stream, &header, req, &meta_store).await?;
+                _ => {
+                    log::error!("Unsupported API Key: {:?}", api_key);
+                    Err(anyhow::anyhow!("Unsupported API Key: {:?}", api_key))
                 }
+            };
+            if let std::result::Result::Ok(response) = reponse {
+                log::debug!("Response length: {}", response.len());
+                let _ = tx.send(response);
+            } else {
+                log::error!("Failed to handle request for api_key: {:?}", api_key);
             }
-            ApiKey::Heartbeat =>  {
-                log::debug!("Heartbeat Request");
-                let _ = RequestKind::Heartbeat(HeartbeatRequest::decode(&mut buf, header.request_api_version).unwrap());
-                handle_heartbeat_request(&mut stream, &header).await?;
-            }
-            _ => {
-                log::error!("Unsupported API Key: {:?}", api_key);
-                continue; // or return Err(...)
-            }
-        };
+        });
+        
     }
 }

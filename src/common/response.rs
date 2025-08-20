@@ -1,29 +1,24 @@
 use kafka_protocol::{messages::RequestHeader, protocol::Encodable};
 use anyhow::Result;
-use tokio::io::{AsyncWrite, AsyncWriteExt};
 
-pub async fn send_kafka_response<T, W>(
-    stream: &mut W,
+pub async fn send_kafka_response<T>(
     header: &RequestHeader,
     response: &T,
-) -> Result<()>
+) -> Result<Vec<u8>>
 where 
     T: Encodable,
-    W: AsyncWrite + Unpin,
 {
     let is_flexible = is_flexible_version(header.request_api_key, header.request_api_version);
-    send_kafka_response_insert_prefix(stream, header, response, is_flexible).await
+    send_kafka_response_insert_prefix(header, response, is_flexible).await
 }
 
-pub async fn send_kafka_response_insert_prefix<T, W>(
-    stream: &mut W,
+pub async fn send_kafka_response_insert_prefix<T>(
     header: &RequestHeader,
     response: &T,
     insert_flag: bool,
-) -> Result<()>
+) -> Result<Vec<u8>>
 where 
     T: Encodable,
-    W: AsyncWrite + Unpin,
 {
     let mut response_buf = vec![];
     response.encode(&mut response_buf, header.request_api_version)?;
@@ -36,11 +31,9 @@ where
     full_response.extend_from_slice(&(response_buf.len() as u32 + 4).to_be_bytes());
     full_response.extend_from_slice(&header.correlation_id.to_be_bytes());
     full_response.extend_from_slice(&response_buf);
+    log::debug!("Full Kafka response length: {}", full_response.len());
 
-    stream.write_all(&full_response).await?;
-    stream.flush().await?;
-
-    Ok(())
+    Ok(full_response)
 }
 
 pub fn is_flexible_version(api_key: i16, version: i16) -> bool {
@@ -56,7 +49,7 @@ pub fn is_flexible_version(api_key: i16, version: i16) -> bool {
         13 => version >= 3,  // LeaveGroup
         14 => version >= 4,  // SyncGroup
         15 => version >= 3,  // DescribeGroups
-        18 => version >= 3,  // ApiVersions
+        18 => version >= 18,  // ApiVersions
         19 => version >= 5,  // CreateTopics
         20 => version >= 3,  // DeleteTopics
         21 => version >= 1,  // DeleteRecords

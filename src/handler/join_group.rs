@@ -1,7 +1,7 @@
-
-use tokio::io::AsyncWrite;
 use anyhow::Result;
 use std::time::SystemTime;
+use uuid::Uuid;
+use std::collections::BTreeMap;
 use kafka_protocol::messages::join_group_request::JoinGroupRequest;
 use kafka_protocol::messages::RequestHeader;
 use kafka_protocol::protocol::StrBytes;
@@ -12,24 +12,19 @@ use kafka_protocol::messages::join_group_response::{
 
 use crate::common::consumer::{ConsumerGroup, ConsumerGroupMember, ConsumerGroupTopic};
 use crate::common::response::send_kafka_response;
-use crate::storage::meta_store_impl::MetaStoreImpl;
 use crate::traits::meta_store::MetaStore;
-use uuid::Uuid;
-use std::collections::BTreeMap;
+use crate::handler::context::HandlerContext;
 
-
-pub async fn handle_join_group_request<W>(
-    stream: &mut W,
+pub async fn handle_join_group_request(
     header: &RequestHeader,
     request: &JoinGroupRequest,
-    meta_store: &MetaStoreImpl,
-) -> Result<()>
-where
-    W: AsyncWrite + Unpin + Send,
+    handler_ctx: &HandlerContext,
+) -> Result<Vec<u8>>
 {
     log::info!("Handling JoinGroupRequest API VERSION {}", header.request_api_version);
     log::debug!("JoinGroupRequest: {:?}", request);
 
+    let meta_store = handler_ctx.meta_store.clone();
     // Get the consumer group from the meta store
     let group_id = request.group_id.clone();
     // Update the heartbeat for the consumer group
@@ -89,10 +84,8 @@ where
     };
 
     log::debug!("JoinGroupResponse: {:?}", response);
-
-    send_kafka_response(stream, header, &response).await?;
     log::debug!("Sent JoinGroupResponse");
-    Ok(())
+    send_kafka_response(header, &response).await
 }
 
 fn generate_member_id(group_id: &str) -> String {

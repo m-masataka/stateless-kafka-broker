@@ -1,4 +1,3 @@
-use tokio::io::AsyncWrite;
 use anyhow::Result;
 use kafka_protocol::messages::RequestHeader;
 use kafka_protocol::protocol::StrBytes;
@@ -12,23 +11,26 @@ use kafka_protocol::messages::TopicName;
 use kafka_protocol::messages::BrokerId;
 use kafka_protocol::error::ResponseError::UnknownTopicOrPartition;
 
-use crate::storage::meta_store_impl::MetaStoreImpl;
-use crate::{common::{config::ClusterConfig, response::send_kafka_response, topic_partition::Topic}};
+use crate::{
+    common::{
+        response::send_kafka_response,
+        topic_partition::Topic
+    }
+};
 use crate::traits::meta_store::MetaStore;
+use crate::handler::context::HandlerContext;
 
-pub async fn handle_metadata_request<W>(
-    stream: &mut W,
+pub async fn handle_metadata_request(
     header: &RequestHeader,
     request: &MetadataRequest,
-    cluster_config: &ClusterConfig,
-    meta_store: &MetaStoreImpl,
-) -> Result<()>
-where
-    W: AsyncWrite + Unpin + Send,
+    handler_ctx: &HandlerContext,
+) -> Result<Vec<u8>>
 {
     log::info!("Handling MetadataRequest API VERSION {}", header.request_api_version);
     log::debug!("MetadataRequest: {:?}", request);
 
+    let meta_store = handler_ctx.meta_store.clone();
+    let cluster_config = handler_ctx.cluster_config.clone();
     let mut response = MetadataResponse::default();
     let brokers = cluster_config
         .brokers
@@ -99,10 +101,9 @@ where
         }
     };
 
-    send_kafka_response(stream, header, &response).await?;
     log::debug!("MetadataResponse: {:?}", response);
     log::debug!("Sent MetadataResponse");
-    Ok(())
+    send_kafka_response(header, &response).await
 }
 
 pub fn to_metadata_response_topic(topic: &Topic, leader_id: i32) -> MetadataResponseTopic {
