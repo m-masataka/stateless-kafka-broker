@@ -150,6 +150,23 @@ impl UnsendMetaStore for RedisMetaStore {
         Ok(())
     }
 
+    async fn get_consumer_groups(&self) -> Result<Vec<ConsumerGroup> > {
+        // Get all consumer groups from Redis
+        let keys: Vec<String> = self.client.keys("consumer_group:*").await?;
+        let mut consumer_groups = Vec::new();
+        for key in keys {
+            let maybe_value: Option<String> = self.client.get(&key).await?;
+            let value = match maybe_value {
+                Some(v) => v,
+                None => continue, // Skip if no value found
+            };
+            if let Ok(consumer_group) = serde_json::from_str::<ConsumerGroup>(&value) {
+                consumer_groups.push(consumer_group);
+            }
+        }
+        Ok(consumer_groups)
+    }
+
     async fn get_consumer_group(&self, group_id: &str) -> Result<Option<ConsumerGroup>> {
         // Get the consumer group by group ID
         let key = format!("consumer_group:{}", group_id);

@@ -72,6 +72,14 @@ impl MetaStore for MetaStoreImpl {
         }
     }
 
+    async fn get_consumer_groups(&self) -> Result<Vec<ConsumerGroup>> {
+        match self {
+            MetaStoreImpl::File(f) => f.get_consumer_groups().await,
+            MetaStoreImpl::S3(s) => s.get_consumer_groups().await,
+            MetaStoreImpl::Redis(r) => r.get_consumer_groups().await,
+        }
+    }
+
     async fn get_consumer_group(&self, group_id: &str) -> Result<Option<ConsumerGroup>> {
         match self {
             MetaStoreImpl::File(f) => f.get_consumer_group(group_id).await,
