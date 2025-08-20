@@ -1,4 +1,3 @@
-use tokio::io::AsyncWrite;
 use anyhow::Result;
 use kafka_protocol::
 {   
@@ -21,27 +20,27 @@ use kafka_protocol::
 use crate::{
     common::response::send_kafka_response,
     common::index::index_data,
-    storage::{index_store_impl::IndexStoreImpl, log_store_impl::LogStoreImpl, meta_store_impl::MetaStoreImpl},
-    traits::{index_store::IndexStore, log_store::LogStore, meta_store::MetaStore}
+    storage::index_store_impl::IndexStoreImpl,
+    traits::{
+        index_store::IndexStore,
+        log_store::LogStore,
+        meta_store::MetaStore
+    }
 };
-use crate::common::config::ClusterConfig;
+use crate::handler::context::HandlerContext;
 
-
-
-pub async fn handle_produce_request<W>(
-    stream: &mut W,
+pub async fn handle_produce_request(
     header: &RequestHeader,
     request: &ProduceRequest,
-    cluster_config: &ClusterConfig,
-    meta_store: &MetaStoreImpl,
-    log_store: &LogStoreImpl,
-    index_store: &IndexStoreImpl,
-) -> Result<()> 
-where
-    W: AsyncWrite + Unpin + Send,
+    handler_ctx: &HandlerContext,
+) -> Result<Vec<u8>>
 {
     log::debug!("Handling ProduceRequest API VERSION {}", header.request_api_version);
 
+    let meta_store = handler_ctx.meta_store.clone();
+    let index_store = handler_ctx.index_store.clone();
+    let log_store = handler_ctx.log_store.clone();
+    let cluster_config = handler_ctx.cluster_config.clone();
     let mut response = ProduceResponse::default();
     response.throttle_time_ms = 0;
 
@@ -75,7 +74,7 @@ where
             let lock_start = Instant::now();
             // lock index store
             try_lock_with_retry(
-                index_store,
+                &index_store,
                 &topic_id.to_string(),
                 request_partition_data.index,
                 10, // TTL in seconds
@@ -175,9 +174,8 @@ where
     node_endpoint.port = cluster_config.port;
     response.node_endpoints = vec![node_endpoint];
 
-    send_kafka_response(stream, header, &response).await?;
     log::debug!("Sent ProduceResponse");
-    Ok(())
+    send_kafka_response(header, &response).await
 }
 
 use tokio::time::{sleep, Duration, Instant};

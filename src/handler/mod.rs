@@ -13,3 +13,4 @@ pub mod delete_topics;
 pub mod offset_commit;
 pub mod leave_group;
 pub mod consumer_group_heartbeat;
+pub mod context;

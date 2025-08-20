@@ -1,4 +1,3 @@
-use tokio::io::AsyncWrite;
 use anyhow::Result;
 use kafka_protocol::{
     messages::{
@@ -9,22 +8,21 @@ use kafka_protocol::{
     },
 };
 use uuid::Uuid;
-use crate::{storage::meta_store_impl::MetaStoreImpl, traits::meta_store::MetaStore};
+use crate::traits::meta_store::MetaStore;
 use crate::common::topic_partition::Topic;
 use crate::common::response::send_kafka_response;
+use crate::handler::context::HandlerContext;
 
-pub async fn handle_create_topics_request<W>(
-    stream: &mut W,
+pub async fn handle_create_topics_request(
     header: &RequestHeader,
     request: &CreateTopicsRequest,
-    meta_store: &MetaStoreImpl,
-) -> Result<()>
-where
-    W: AsyncWrite + Unpin + Send,
+    handler_ctx: &HandlerContext,
+) -> Result<Vec<u8>>
 {
     log::info!("Handling CreateTopicsRequest API VERSION {}", header.request_api_version);
     log::debug!("CreateTopicsRequest: {:?}", request);
 
+    let meta_store = handler_ctx.meta_store.clone();
     let mut response = CreateTopicsResponse::default();
     response.throttle_time_ms = 0;
     let mut response_topics = Vec::new();
@@ -78,7 +76,6 @@ where
     }
     response.topics = response_topics;
     log::debug!("CreateTopicsResponse: {:?}", response);
-    send_kafka_response(stream, header, &response).await?;
     log::debug!("Sent CreateTopicsResponse");
-    Ok(())
+    send_kafka_response(header, &response).await
 }

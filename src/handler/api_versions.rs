@@ -1,18 +1,16 @@
 
-use tokio::io::AsyncWrite;
 use anyhow::Result;
 use kafka_protocol::messages::RequestHeader;
 use kafka_protocol::messages::api_versions_response::{ApiVersion, ApiVersionsResponse};
 use kafka_protocol::messages::api_versions_request::ApiVersionsRequest;
-use crate::common::response::send_kafka_response_insert_prefix;
+use crate::common::response::send_kafka_response;
+use crate::handler::context::HandlerContext;
 
-pub async fn handle_api_versions_request<W>(
-    stream: &mut W,
+pub async fn handle_api_versions_request(
     header: &RequestHeader,
     request: &ApiVersionsRequest,
-) -> Result<()>
-where
-    W: AsyncWrite + Unpin + Send,
+    _ : &HandlerContext,
+) -> Result<Vec<u8>>
 {
     log::info!("Handling ApiVersionRequest API VERSION {}", header.request_api_version);
     log::debug!("ApiVersionRequest: {:?}", request);
@@ -22,10 +20,8 @@ where
     response.throttle_time_ms = 0;
     response.api_keys = all_supported_api_versions();
 
-    send_kafka_response_insert_prefix(stream, header, &response, false).await?;
-    log::debug!("ApiVersionsResponse: {:?}", response);
     log::info!("Sent ApiVersionsResponse with {} API versions", response.api_keys.len());
-    Ok(())
+    send_kafka_response(header, &response).await
 }
 
 fn all_supported_api_versions() -> Vec<ApiVersion> {

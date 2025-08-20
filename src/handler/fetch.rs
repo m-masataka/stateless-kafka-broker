@@ -1,5 +1,4 @@
 use bytes::Bytes;
-use tokio::io::AsyncWrite;
 use anyhow::Result;
 use kafka_protocol::{
     messages::{
@@ -13,24 +12,30 @@ use kafka_protocol::{
     },
 };
 
-use crate::{common::{index::{get_keys_before_threshold}, response::send_kafka_response}, storage::{index_store_impl::IndexStoreImpl, log_store_impl::LogStoreImpl, meta_store_impl::MetaStoreImpl}, traits::meta_store::MetaStore};
+use crate::{
+    common::{
+        index::get_keys_before_threshold,
+        response::send_kafka_response
+    },
+    traits::meta_store::MetaStore
+};
 use crate::traits::log_store::LogStore;
 use crate::traits::index_store::IndexStore;
+use crate::handler::context::HandlerContext;
 
 
-pub async fn handle_fetch_request<W>(
-    stream: &mut W,
+pub async fn handle_fetch_request(
     header: &RequestHeader,
     request: &FetchRequest,
-    log_store: &LogStoreImpl,
-    meta_store: &MetaStoreImpl,
-    index_store: &IndexStoreImpl,
-) -> Result<()>
-where
-    W: AsyncWrite + Unpin + Send,
+    handler_ctx: &HandlerContext,
+) -> Result<Vec<u8>>
 {
     log::debug!("Handling FetchRequest API VERSION {}", header.request_api_version);
     log::debug!("FetchRequest: {:?}", request);
+
+    let meta_store = handler_ctx.meta_store.clone();
+    let index_store = handler_ctx.index_store.clone();
+    let log_store = handler_ctx.log_store.clone();
     let mut response = FetchResponse::default();
     response.throttle_time_ms = 0;
     response.error_code = 0; // set succeeded error code
@@ -133,8 +138,7 @@ where
         topic_responses.push(topic_response);
     }
     response.responses = topic_responses;
-    send_kafka_response(stream, header, &response).await?;
     log::debug!("Sent FetchResponse");
     log::debug!("FetchResponse: {:?}", response);
-    Ok(())
+    send_kafka_response(header, &response).await
 }

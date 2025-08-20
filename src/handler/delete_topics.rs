@@ -1,4 +1,3 @@
-use tokio::io::AsyncWrite;
 use anyhow::Result;
 use kafka_protocol::messages::{RequestHeader, TopicName};
 use kafka_protocol::messages::delete_topics_response::{
@@ -14,37 +13,35 @@ use kafka_protocol::error::ResponseError::UnknownTopicOrPartition;
 use crate::storage::meta_store_impl::MetaStoreImpl;
 use crate::{common::{response::send_kafka_response}};
 use crate::traits::meta_store::MetaStore;
+use crate::handler::context::HandlerContext;
 
-pub async fn handle_delete_topics_request<W>(
-    stream: &mut W,
+pub async fn handle_delete_topics_request(
     header: &RequestHeader,
     request: &DeleteTopicsRequest,
-    meta_store: &MetaStoreImpl,
-) -> Result<()>
-where
-W: AsyncWrite + Unpin + Send,
+    handler_ctx: &HandlerContext,
+) -> Result<Vec<u8>>
 {
     log::info!("Handling DeleteTopicsRequest API VERSION {}", header.request_api_version);
     log::debug!("DeleteTopicsRequest: {:?}", request);
 
+    let meta_store = handler_ctx.meta_store.clone();
     let mut response = DeleteTopicsResponse::default();
     response.throttle_time_ms = 0;
     let mut topic_responses = Vec::new();
     if header.request_api_version < 5 {
         for topic_name in &request.topic_names {
             log::debug!("Deleting topic by name: {}", topic_name.as_str());
-            let result = delete_topic_by_name(topic_name.as_str(), meta_store).await;
+            let result = delete_topic_by_name(topic_name.as_str(), &meta_store).await;
             topic_responses.push(result);
         }
     } else {
         for topic in &request.topics {
-            let result = delete_topic(topic, meta_store).await;
+            let result = delete_topic(topic, &meta_store).await;
             topic_responses.push(result);
         }
     }
     response.responses = topic_responses;
-    send_kafka_response(stream, header, &response).await?;
-    Ok(())
+    send_kafka_response(header, &response).await
 }
 
 async fn delete_topic(topic: &DeleteTopicState, meta_store: &MetaStoreImpl) -> DeletableTopicResult {
