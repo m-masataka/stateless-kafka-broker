@@ -129,6 +129,27 @@ impl UnsendMetaStore for S3MetaStore {
         }
     }
 
+    async fn get_consumer_groups(&self) -> Result<Vec<ConsumerGroup> > {
+        let group_list = self.s3_client.list_objects(
+            &self.bucket,
+            self.prefix.as_deref()
+        ).await?;
+        
+        let mut groups = Vec::new();
+        for object in group_list {
+            if object.starts_with("consumer-group-") {
+                let (data, _) = self.s3_client.get_object(&self.bucket, &object).await?;
+                if let Ok(group) = serde_json::from_slice::<ConsumerGroup>(&data) {
+                    groups.push(group);
+                } else {
+                    log::warn!("Failed to deserialize consumer group from S3: {}", object);
+                }
+            }
+        }
+        log::debug!("Successfully retrieved all consumer groups from S3");
+        Ok(groups)
+    }
+
     async fn get_consumer_group(&self, group_id: &str) -> Result<Option<ConsumerGroup>> {
         let object_key = self.metadata_key(format!("consumer-group-{}", group_id));
         match self.s3_client.get_object(&self.bucket, &object_key).await {

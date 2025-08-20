@@ -189,6 +189,24 @@ impl UnsendMetaStore for FileMetaStore {
         Ok(())
     }
 
+    async fn get_consumer_groups(&self) -> Result<Vec<ConsumerGroup> > {
+        let mut consumer_groups = Vec::new();
+        if !self.consumer_group_dir_path.exists() {
+            return Ok(consumer_groups);
+        }
+
+        for entry in std::fs::read_dir(&self.consumer_group_dir_path)? {
+            let entry = entry?;
+            if entry.file_type()?.is_file() {
+                let file = File::open(entry.path())?;
+                let reader = BufReader::new(file);
+                let consumer_group: ConsumerGroup = serde_json::from_reader(reader)?;
+                consumer_groups.push(consumer_group);
+            }
+        }
+        Ok(consumer_groups)
+    }
+
     async fn get_consumer_group(&self, group_id: &str) -> Result<Option<ConsumerGroup>> {
         let filename = format!("{group_id}.json");
         let path = &self.consumer_group_dir_path.join(filename);
