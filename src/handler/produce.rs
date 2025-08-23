@@ -18,8 +18,7 @@ use kafka_protocol::
 };
 
 use crate::{
-    common::response::send_kafka_response,
-    common::index::index_data,
+    common::{index::index_data, response::send_kafka_response, utils::jittered_delay},
     storage::index_store_impl::IndexStoreImpl,
     traits::{
         index_store::IndexStore,
@@ -73,7 +72,7 @@ pub async fn handle_produce_request(
 
             let lock_start = Instant::now();
             // lock index store
-            try_lock_with_retry(
+            let lock_id = try_lock_with_retry(
                 &index_store,
                 &topic_id.to_string(),
                 request_partition_data.index,
@@ -131,7 +130,7 @@ pub async fn handle_produce_request(
                         })?;
 
                     // Unlock the index store after writing
-                    index_store.unlock_exclusive(&topic_id.to_string(), request_partition_data.index).await
+                    index_store.unlock_exclusive(&topic_id.to_string(), request_partition_data.index, &lock_id).await
                         .map_err(|e| {
                             log::error!("Failed to unlock index store: {:?}", e);
                             ResponseError::KafkaStorageError
@@ -146,7 +145,7 @@ pub async fn handle_produce_request(
                     partition_produce_response.log_append_time_ms = 0;
                     partition_produce_response.log_start_offset = -1;
                     // Unlock the index store even if writing fails
-                    index_store.unlock_exclusive(&topic_id.to_string(), request_partition_data.index).await
+                    index_store.unlock_exclusive(&topic_id.to_string(), request_partition_data.index, &lock_id).await
                         .map_err(|e| {
                             log::error!("Failed to unlock index store after error: {:?}", e);
                             ResponseError::KafkaStorageError
@@ -186,17 +185,21 @@ async fn try_lock_with_retry(
     partition: i32,
     ttl_secs: i64,
     wait_secs: u64,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<String> {
     let deadline = Instant::now() + Duration::from_secs(wait_secs);
 
     loop {
         match index_store.lock_exclusive(topic, partition, ttl_secs).await {
-            Ok(true) => return Ok(()), // lock acquired successfully
-            Ok(false) => {
-                if Instant::now() >= deadline {
-                    anyhow::bail!("Timed out waiting for lock");
+            Ok(lock_id) => {
+                match lock_id {
+                    Some(id) => return Ok(id), // lock acquired successfully
+                    None => {
+                        if Instant::now() >= deadline {
+                            anyhow::bail!("Timed out waiting for lock");
+                        }
+                        sleep(Duration::from_millis(jittered_delay(200))).await; // wait before retrying
+                    }
                 }
-                sleep(Duration::from_millis(200)).await; // wait before retrying
             }
             Err(e) => return Err(e),
         }

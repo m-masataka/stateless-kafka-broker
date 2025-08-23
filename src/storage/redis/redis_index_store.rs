@@ -1,13 +1,23 @@
+use core::f64;
+
 use crate::traits::index_store::UnsendIndexStore;
-use crate::storage::redis::redis_client::RedisClient;
 use crate::common::index::IndexData;
 
+use fred::{
+    clients::Pool, prelude::{
+        KeysInterface, SortedSetsInterface
+    }, types::{
+        Expiration,
+        SetOptions,
+    }
+};
+
 pub struct RedisIndexStore {
-    client: RedisClient,
+    client: Pool,
 }
 
 impl RedisIndexStore {
-    pub fn new(client: RedisClient) -> Self {
+    pub fn new(client: Pool) -> Self {
         Self {
             client,
         }
@@ -22,7 +32,13 @@ impl UnsendIndexStore for RedisIndexStore {
         offset: i64,
     ) -> anyhow::Result<()> {
         let key = format!("offset:{}:{}", topic, partition);
-        self.client.set(&key, offset).await?;
+        match self.client.set::<(), String, i64>(key, offset, None, None, false).await {
+          Ok(_val) => {},
+          Err(err) => {
+            log::error!("Failed to set offset in Redis: {}", err);
+            return Err(anyhow::anyhow!("Failed to set offset in Redis"));
+          }
+        }
         Ok(())
     }
 
@@ -44,22 +60,38 @@ impl UnsendIndexStore for RedisIndexStore {
         topic: &str,
         partition: i32,
         timeout_secs: i64,
-    ) -> anyhow::Result<bool> {
+    ) -> anyhow::Result<Option<String>> {
         // let mut conn = self.conn.lock().await;
         let key = format!("lock:{}:{}", topic, partition);
-        let value = uuid::Uuid::new_v4().to_string(); // unique token for reentrant safety if needed
-        let result = self.client.lock_exclusive(&key, &value, timeout_secs).await?;
-        Ok(result)
+        let lock_id = uuid::Uuid::new_v4().to_string(); // unique token for reentrant safety if needed
+        // let result = self.client.lock_exclusive(&key, &value, timeout_secs).await?;
+        let result: Option<String> = self.client
+            .set(key, &lock_id, Some(Expiration::EX(timeout_secs as i64)), Some(SetOptions::NX), false)
+            .await?;
+        if result.is_some() {
+            Ok(Some(lock_id)) // if lock acquired, return the lock id
+        } else {
+            Ok(None)
+        }
     }
 
     async fn unlock_exclusive(
         &self,
         topic: &str,
         partition: i32,
-    ) -> anyhow::Result<()> {
+        lock_id: &str,
+    ) -> anyhow::Result<bool> {
+        // TODO: Use Lua script for atomic unlock
         let key = format!("lock:{}:{}", topic, partition);
-        let _: () = self.client.unlock_exclusive(&key).await?;
-        Ok(())
+        let deleted: i64 = self.client
+            .del(&key)
+            .await?;
+        if deleted == 0 {
+            log::warn!("Failed to unlock exclusive lock for topic: {}, partition: {}, lock_id: {}", topic, partition, lock_id);
+        } else {
+            log::debug!("Successfully unlocked exclusive lock for topic: {}, partition: {}, lock_id: {}", topic, partition, lock_id);
+        }
+        Ok(deleted == 1)
     }
 
 
@@ -77,7 +109,12 @@ impl UnsendIndexStore for RedisIndexStore {
             log::error!("Failed to serialize index data: {:?}", e);
             anyhow::anyhow!("Serialization error")
         })?;
-        let _: () = self.client.zadd(&key, &data_string, start_offset).await?;
+        let _: usize = self.client.zadd(&key, 
+            Some(SetOptions::NX), 
+            None,
+            true,
+            false,
+            (start_offset as f64, data_string)).await?;
         Ok(())
     }
 
@@ -89,7 +126,7 @@ impl UnsendIndexStore for RedisIndexStore {
     ) -> anyhow::Result<Vec<IndexData>> {
         let key = format!("index:{}:{}", topic, partition);
         let results: Vec<String> = self.client
-            .zrangebyscore(&key, start_offset, i64::MAX)
+            .zrangebyscore(&key, start_offset as f64, f64::INFINITY, false, None)
             .await?;
         let mut index_data = Vec::new();
         for result in results {

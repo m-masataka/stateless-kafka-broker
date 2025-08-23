@@ -1,3 +1,4 @@
+use crate::common::utils::jittered_delay;
 use crate::storage::{
     file::file_meta_store::FileMetaStore,
     file::file_log_store::FileLogStore,
@@ -7,18 +8,42 @@ use crate::storage::{
     s3::s3_log_store::S3LogStore,
     s3::s3_client::S3Client,
     redis::redis_meta_store::RedisMetaStore,
-    redis::redis_client::RedisClient,
 };
 use crate::storage::{index_store_impl::IndexStoreImpl};
 use crate::storage::redis::redis_index_store::RedisIndexStore;
 use crate::common::config::StorageType;
 use anyhow::Result;
-use tokio::sync::Mutex;
-use std::{
-    sync::Arc,
-};
-use redis::cluster::ClusterClient;
+use fred::prelude::Pool;
+use tokio::time::sleep;
 use crate::common::config::ServerConfig;
+use std::time::Duration;
+use fred::{
+    prelude::{
+        Builder, ClientLike, Config, ReconnectPolicy, TcpConfig
+    },
+};
+
+fn redis_uri(nodes: Vec<String>) -> String {
+    assert!(!nodes.is_empty(), "nodes must not be empty");
+    if nodes.len() == 1 {
+        // single instance
+        format!("redis://{}",  nodes[0])
+    } else {
+        // cluster
+        let mut uri = format!("redis-cluster://{}", nodes[0]);
+        let query: String = nodes[1..]
+            .iter()
+            .map(|n| format!("node={}", n))
+            .collect::<Vec<_>>()
+            .join("&");
+        if !query.is_empty() {
+            uri.push('?');
+            uri.push_str(&query);
+        }
+        log::debug!("Redis Cluster URI: {:?}", uri);
+        uri
+    }
+}
 
 pub async fn load_log_store(server_config: &ServerConfig) -> Result<LogStoreImpl> {
     let log_store_load = match &server_config.log_store_type {
@@ -53,17 +78,23 @@ pub async fn load_index_store(server_config: &ServerConfig) -> Result<IndexStore
                 .split(',')
                 .map(|s| s.trim().to_string())
                 .collect::<Vec<String>>();
-            let redis_client: RedisClient = if redis_urls.len() > 1 {
-                log::debug!("Using Redis Cluster with URLs: {:?}", redis_urls);
-                let client = ClusterClient::new(redis_urls)?;
-                let conn = client.get_async_connection().await?;
-                RedisClient::new(true, Some(Arc::new(Mutex::new(conn))), None)
-            } else {
-                log::debug!("Using single Redis instance at: {}", redis_urls[0]);
-                let client = redis::Client::open(redis_urls[0].clone())?;
-                let conn = client.get_multiplexed_async_connection().await?;
-                RedisClient::new(false, None, Some(Arc::new(Mutex::new(conn))))
-            };
+
+            let config = Config::from_url(&*redis_uri(redis_urls))
+                .expect("Failed to create Redis config");
+            let pool_size = 100;
+            let redis_client = Builder::from_config(config)
+                .with_connection_config(|c| {
+                    c.connection_timeout = Duration::from_secs(10);
+                    c.tcp = TcpConfig{
+                        nodelay: Some(true),
+                        ..Default::default()
+                    };
+                })
+                .set_policy(ReconnectPolicy::new_exponential(1000, 1000, 30000, 3))
+                .build_pool(pool_size)
+                .expect("Failed to create redis pool");
+            init_with_retry(&redis_client, 0, 1000, 30_000, 3).await?;
+            // redis_client.init().await.expect("Failed to connect to redis");
             IndexStoreImpl::Redis(RedisIndexStore::new(redis_client))
         },
         _ => {
@@ -98,19 +129,52 @@ pub async fn load_meta_store(server_config: &ServerConfig) -> Result<MetaStoreIm
                 .split(',')
                 .map(|s| s.trim().to_string())
                 .collect::<Vec<String>>();
-            let redis_client: RedisClient = if redis_urls.len() > 1 {
-                log::debug!("Using Redis Cluster with URLs: {:?}", redis_urls);
-                let client = ClusterClient::new(redis_urls)?;
-                let conn = client.get_async_connection().await?;
-                RedisClient::new(true, Some(Arc::new(Mutex::new(conn))), None)
-            } else {
-                log::debug!("Using single Redis instance at: {}", redis_urls[0]);
-                let client = redis::Client::open(redis_urls[0].clone())?;
-                let conn = client.get_multiplexed_async_connection().await?;
-                RedisClient::new(false, None, Some(Arc::new(Mutex::new(conn))))
-            };
+            let config = Config::from_url(&*redis_uri(redis_urls))
+                .expect("Failed to create Redis config");
+            let pool_size = 100;
+            let redis_client = Builder::from_config(config)
+                .with_connection_config(|c| {
+                    c.connection_timeout = Duration::from_secs(10);
+                    c.tcp = TcpConfig{
+                        nodelay: Some(true),
+                        ..Default::default()
+                    };
+                })
+                .set_policy(ReconnectPolicy::new_exponential(1000, 1000, 30000, 3))
+                .build_pool(pool_size)
+                .expect("Failed to create redis pool");
+            init_with_retry(&redis_client, 0, 1000, 30_000, 3).await?;
+            // redis_client.init().await.expect("Failed to connect to redis");
             MetaStoreImpl::Redis(RedisMetaStore::new(redis_client))
         }
     };
     Ok(meta_store_load)
+}
+
+
+async fn init_with_retry(pool: &Pool, max_attempts: u32, min_delay_ms: u64, max_delay_ms: u64, base: u32) -> anyhow::Result<()> {
+    let mut attempt = 0;
+    let mut delay = min_delay_ms;
+
+    loop {
+        attempt += 1;
+        match pool.init().await {
+            Ok(_) => {
+                log::info!("✅ Connected to Redis on attempt {}", attempt);
+                return Ok(());
+            }
+            Err(e) => {
+                if max_attempts != 0 && attempt >= max_attempts {
+                    return Err(anyhow::anyhow!("Redis init failed after {} attempts: {e}", attempt));
+                }
+                // backoff with jitter
+                let jitter = jittered_delay(100);
+                let sleep_ms = delay.saturating_add(jitter).min(max_delay_ms);
+                log::warn!("⚠️ Redis init failed (attempt {}): {} -> retry in {} ms", attempt, e, sleep_ms);
+                sleep(Duration::from_millis(sleep_ms)).await;
+                // next delay
+                delay = (delay.saturating_mul(base as u64)).min(max_delay_ms);
+            }
+        }
+    }
 }
