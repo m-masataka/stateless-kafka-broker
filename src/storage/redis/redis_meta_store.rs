@@ -1,16 +1,32 @@
+use crate::common::utils::jittered_delay;
 use crate::traits::meta_store::UnsendMetaStore;
 use crate::common::topic_partition::Topic;
 use crate::common::consumer::{ConsumerGroup, ConsumerGroupMember};
+use std::time::Duration;
 use anyhow::Result;
-use crate::storage::redis::redis_client::RedisClient;
+use tokio::time::sleep;
+use fred::{
+    bytes_utils::Str,
+    types::Key,
+    clients::Pool,
+    types::{
+        Expiration,
+        SetOptions,
+    },
+    prelude::{
+        KeysInterface,
+        SetsInterface,
+    },
+};
+
 
 pub struct RedisMetaStore {
-    client: RedisClient,
+    client: Pool,
     ttl_secs: i64,
 }
 
 impl RedisMetaStore {
-    pub fn new(client: RedisClient) -> Self {
+    pub fn new(client: Pool) -> Self {
         Self {
             client,
             ttl_secs: 10,
@@ -24,7 +40,13 @@ impl UnsendMetaStore for RedisMetaStore {
         // using the topic name as the key and the serialized data as the value
         let key = format!("topic:{}", data.topic_id);
         let value = serde_json::to_string(data)?;
-        let _: () = self.client.set(&key, &value).await?;
+        match self.client.set::<(), String, String>(key, value, None, None, false).await {
+          Ok(_val) => {},
+          Err(err) => {
+            log::error!("Failed to set offset in Redis: {}", err);
+            return Err(anyhow::anyhow!("Failed to set offset in Redis"));
+          }
+        }
 
         match &data.name {
             Some(name) => {
@@ -114,7 +136,9 @@ impl UnsendMetaStore for RedisMetaStore {
     }
 
     async fn get_all_topics(&self) -> Result<Vec<Topic>> {
-        let keys: Vec<String> = self.client.keys("topic:*").await?;
+        let max_align_topics = 1000000; // Arbitrary large number to limit the scan
+        
+        let keys: Vec<String> = self.scan_keys("topic:*", max_align_topics).await?;
         let mut topics = Vec::new();
         for key in keys {
             let maybe_value: Option<String> = self.client.get(&key).await?;
@@ -146,13 +170,20 @@ impl UnsendMetaStore for RedisMetaStore {
         // Save the consumer group information in Redis
         let key = format!("consumer_group:{}", data.group_id);
         let value = serde_json::to_string(data)?;
-        let _: () = self.client.set(&key, &value).await?;
+        match self.client.set::<(), String, String>(key, value, None, None, false).await {
+          Ok(_val) => {},
+          Err(err) => {
+            log::error!("Failed to set consumer group in Redis: {}", err);
+            return Err(anyhow::anyhow!("Failed to set set consumer group in Redis"));
+          }
+        }
         Ok(())
     }
 
     async fn get_consumer_groups(&self) -> Result<Vec<ConsumerGroup> > {
         // Get all consumer groups from Redis
-        let keys: Vec<String> = self.client.keys("consumer_group:*").await?;
+        let max_align_groups = 1000000; // Arbitrary large number to limit the scan
+        let keys: Vec<String> = self.scan_keys("consumer_group:*", max_align_groups).await?;
         let mut consumer_groups = Vec::new();
         for key in keys {
             let maybe_value: Option<String> = self.client.get(&key).await?;
@@ -223,7 +254,13 @@ impl UnsendMetaStore for RedisMetaStore {
             // Save the updated consumer group back to Redis
             let updated_value = serde_json::to_string(&consumer_group)?;
             log::debug!("Updated value for consumer group: {}", updated_value);
-            let _: () = client.set(&key, &updated_value).await?;
+            let _ = match client.set::<(), String, String>(key, updated_value, None, None, false).await {
+                Ok(_val) => {},
+                Err(err) => {
+                  log::error!("Failed to set offset in Redis: {}", err);
+                  return Err(anyhow::anyhow!("Failed to set offset in Redis"));
+                }
+            };
             Ok(Some(consumer_group))
         }).await?;
         Ok(result)
@@ -248,7 +285,13 @@ impl UnsendMetaStore for RedisMetaStore {
             consumer_group.update_offset(&topic, partition, offset);
             // Save the updated consumer group back to Redis
             let updated_value = serde_json::to_string(&consumer_group)?;
-            let _: () = client.set(&key, &updated_value).await?;
+            let _ = match client.set::<(), String, String>(key, updated_value, None, None, false).await {
+                Ok(_val) => {},
+                Err(err) => {
+                  log::error!("Failed to set offset in Redis: {}", err);
+                  return Err(anyhow::anyhow!("Failed to set offset in Redis"));
+                }
+            };
             Ok(())
         }).await
     }
@@ -271,7 +314,13 @@ impl UnsendMetaStore for RedisMetaStore {
             consumer_group.members.retain(|m| m.member_id != member_id);
             // Save the updated consumer group back to Redis
             let updated_value = serde_json::to_string(&consumer_group)?;
-            let _: () = client.set(&key, &updated_value).await?;
+            let _ = match client.set::<(), String, String>(key, updated_value, None, None, false).await {
+                Ok(_val) => {},
+                Err(err) => {
+                  log::error!("Failed to set offset in Redis: {}", err);
+                  return Err(anyhow::anyhow!("Failed to set offset in Redis"));
+                }
+            };
             Ok(())
         }).await
     }
@@ -297,7 +346,13 @@ impl UnsendMetaStore for RedisMetaStore {
             }
             // Save the updated consumer group back to Redis
             let updated_value = serde_json::to_string(&consumer_group)?;
-            let _: () = client.set(&key, &updated_value).await?;
+            let _ = match client.set::<(), String, String>(key, updated_value, None, None, false).await {
+                Ok(_val) => {},
+                Err(err) => {
+                  log::error!("Failed to set offset in Redis: {}", err);
+                  return Err(anyhow::anyhow!("Failed to set offset in Redis"));
+                }
+            };
             Ok(Some(consumer_group))
         }).await?;
         Ok(result)
@@ -322,7 +377,13 @@ impl UnsendMetaStore for RedisMetaStore {
             // Save the updated consumer group back to Redis
             let updated_value = serde_json::to_string(&consumer_group)?;
             log::debug!("Updated consumer group member: {:?}", updated_value);
-            let _: () = client.set(&key, &updated_value).await?;
+            let _ = match client.set::<(), String, String>(key, updated_value, None, None, false).await {
+                Ok(_val) => {},
+                Err(err) => {
+                  log::error!("Failed to set offset in Redis: {}", err);
+                  return Err(anyhow::anyhow!("Failed to set offset in Redis"));
+                }
+            };
             Ok(())
         }).await
     }
@@ -332,7 +393,7 @@ impl UnsendMetaStore for RedisMetaStore {
         let lock_key = format!("lock:{}", key);
         
         let result = self.with_redis_lock(self.client.clone(), &lock_key, self.ttl_secs, move |client| async move {
-            let id = client.incr(key, 1).await
+            let id = client.incr(key).await
                 .map_err(|e| anyhow::anyhow!("Failed to increment producer ID: {}", e))?;
             Ok(id)
         }).await?;
@@ -341,23 +402,61 @@ impl UnsendMetaStore for RedisMetaStore {
 }
 
 impl RedisMetaStore {
+    pub async fn scan_keys(&self, pattern: &str, max_keys: usize) -> Result<Vec<String>> {
+        let mut cursor: Str = "0".to_string().into();
+        // break out after max_counts records
+        let mut count = 0;
+        let mut all_keys = Vec::new();
+        loop {
+            let (new_cursor, keys): (Str, Vec<Key>) = self.client.scan_page(cursor.clone(), pattern, Some(100), None).await?;
+            count += keys.len();
+            for key in keys.into_iter() {
+                all_keys.push(format!("{:?}", key));
+            }
+
+            if count >= max_keys || new_cursor == "0" {
+                break;
+            } else {
+                cursor = new_cursor;
+            }
+        }
+        log::debug!("Scanned {} keys matching pattern '{}'", all_keys.len(), pattern);
+        Ok(all_keys)
+    }
+
     pub async fn with_redis_lock<F, Fut, T>(
         &self,
-        client: RedisClient,
+        client: Pool,
         lock_key: &str,
         ttl_secs: i64,
         f: F,
     ) -> Result<T>
     where
-        F: FnOnce(RedisClient) -> Fut + Send + 'static,
+        F: FnOnce(Pool) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = Result<T>> + Send,
         T: Send + 'static,
     {
         const MAX_RETRIES: usize = 200;
         const RETRY_DELAY_MS: u64 = 100;
-    
-        let acquired = client.try_acquire_lock(lock_key, MAX_RETRIES as i64, RETRY_DELAY_MS, ttl_secs).await?;
-    
+        let mut acquired = false;
+        for attempt in 0..MAX_RETRIES {
+            let result: Option<String> = self.client
+                .set(lock_key, "lock", Some(Expiration::EX(ttl_secs)), Some(SetOptions::NX), false)
+                .await?;
+            if result.is_some() {
+                acquired = true;
+                break;
+            } else {
+                log::debug!(
+                    "🔒 Lock busy (attempt {}/{}): {}. Retrying...",
+                    attempt + 1,
+                    MAX_RETRIES,
+                    lock_key
+                );
+            }
+            sleep(Duration::from_millis(jittered_delay(RETRY_DELAY_MS))).await;
+        }
+        
         if !acquired {
             return Err(anyhow::anyhow!("Failed to acquire lock: {}", lock_key));
         }
@@ -365,7 +464,16 @@ impl RedisMetaStore {
         let client_for_closure = client.clone();
         let result = f(client_for_closure).await;
 
-        let _ = client.del(lock_key).await?;
+        //let _ = client.del(lock_key).await?;
+        let deleted: i64 = client
+            .del(lock_key)
+            .await?;
+        if deleted == 0 {
+            log::warn!("Failed to unlock lock for key: {}", lock_key);
+            return Err(anyhow::anyhow!("Failed to unlock lock: {}", lock_key));
+        } else {
+            log::debug!("Successfully unlocked lock for key: {}", lock_key);
+        }
 
         result
     }

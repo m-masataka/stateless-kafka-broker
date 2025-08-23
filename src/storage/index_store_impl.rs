@@ -17,15 +17,15 @@ impl IndexStore for IndexStoreImpl {
         }
     }
 
-    async fn lock_exclusive(&self, topic: &str, partition: i32, timeout: i64) -> anyhow::Result<bool> {
+    async fn lock_exclusive(&self, topic: &str, partition: i32, timeout: i64) -> anyhow::Result<Option<String>> {
         match self {
             IndexStoreImpl::Redis(r) => r.lock_exclusive(topic, partition, timeout).await,
         }
     }
 
-    async fn unlock_exclusive(&self, topic: &str, partition: i32) -> anyhow::Result<()> {
+    async fn unlock_exclusive(&self, topic: &str, partition: i32, lock_id: &str) -> anyhow::Result<bool> {
         match self {
-            IndexStoreImpl::Redis(r) => r.unlock_exclusive(topic, partition).await,
+            IndexStoreImpl::Redis(r) => r.unlock_exclusive(topic, partition, lock_id).await,
         }
     }
 

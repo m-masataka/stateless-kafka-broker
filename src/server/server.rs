@@ -1,5 +1,4 @@
 use crate::server::loader::{load_index_store, load_log_store, load_meta_store};
-use crate::common::config::ServerConfig;
 
 use crate::handler::{
     context::HandlerContext,
@@ -20,6 +19,9 @@ use crate::handler::{
     consumer_group_heartbeat::handle_consumer_group_heartbeat_request,
 };
 use crate::common::config::{load_cluster_config, load_server_config, ClusterConfig};
+use crate::storage::log_store_impl::LogStoreImpl;
+use crate::storage::meta_store_impl::MetaStoreImpl;
+use crate::storage::index_store_impl::IndexStoreImpl;
 use anyhow::{Ok, Result};
 use nix::sys::socket::{setsockopt, sockopt};
 use tokio::{
@@ -27,10 +29,7 @@ use tokio::{
     sync::mpsc,
     io::AsyncReadExt,
 };
-
-use std::{
-    sync::Arc,
-};
+use std::sync::Arc;
 
 use kafka_protocol::messages::{
     RequestKind,
@@ -65,6 +64,10 @@ pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(format!("{}:{}", server_config_load.host, server_config_load.port)).await?;
     log::info!("Kafka-compatible server listening on port {}:{}", server_config_load.host, server_config_load.port);
 
+    let meta_store = Arc::new(load_meta_store(&server_config_load).await.unwrap());
+    let log_store = Arc::new(load_log_store(&server_config_load).await.unwrap());
+    let index_store = Arc::new(load_index_store(&server_config_load).await.unwrap());
+
     
     loop {
         let (stream, addr) = listener.accept().await?;
@@ -96,11 +99,19 @@ pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
         }
         log::info!("Accepted connection from {:?}", addr);
         let cluster_config = cluster_conf_load.clone();
-        let server_config = server_config_load.clone();
+        let meta_store = meta_store.clone();
+        let log_store = log_store.clone();
+        let index_store = index_store.clone();
 
         // Spawn a new task for each connection
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, cluster_config, server_config).await {
+            if let Err(e) = handle_connection(
+                stream,
+                cluster_config,
+                meta_store,
+                log_store,
+                index_store,
+            ).await {
                 log::error!("Connection error: {:?}", e);
             }
         });
@@ -109,7 +120,9 @@ pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
 
 async fn handle_connection(stream: tokio::net::TcpStream, 
     cluster_config: Arc<ClusterConfig>,
-    server_config: Arc<ServerConfig>,
+    meta_store: Arc<MetaStoreImpl>,
+    log_store: Arc<LogStoreImpl>,
+    index_store: Arc<IndexStoreImpl>,
 ) -> Result<()> {
     let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>(); // any request → writer
 
@@ -129,9 +142,6 @@ async fn handle_connection(stream: tokio::net::TcpStream,
         }
     });
 
-
-
-
     loop {
         // Read length prefix
         let mut length_buf = [0u8; 4];
@@ -150,8 +160,10 @@ async fn handle_connection(stream: tokio::net::TcpStream,
         reader.read_exact(&mut buffer).await?;
 
         let tx = tx.clone();
-        let server_config = server_config.clone();
         let cluster_config = cluster_config.clone();
+        let meta_store = meta_store.clone();
+        let log_store = log_store.clone();
+        let index_store = index_store.clone();
 
         tokio::spawn(async move {
             let mut peek = std::io::Cursor::new(&buffer);
@@ -167,9 +179,6 @@ async fn handle_connection(stream: tokio::net::TcpStream,
                 api_key, api_version, header_version, header.correlation_id
             );
 
-            let meta_store = Arc::new(load_meta_store(&server_config).await.unwrap());
-            let log_store = Arc::new(load_log_store(&server_config).await.unwrap());
-            let index_store = Arc::new(load_index_store(&server_config).await.unwrap());
             let handler_ctx = HandlerContext {
                 log_store,
                 meta_store,
