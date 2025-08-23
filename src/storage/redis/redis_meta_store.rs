@@ -317,8 +317,8 @@ impl UnsendMetaStore for RedisMetaStore {
             let _ = match client.set::<(), String, String>(key, updated_value, None, None, false).await {
                 Ok(_val) => {},
                 Err(err) => {
-                  log::error!("Failed to set offset in Redis: {}", err);
-                  return Err(anyhow::anyhow!("Failed to set offset in Redis"));
+                  log::error!("Failed to leave group in Redis: {}", err);
+                  return Err(anyhow::anyhow!("Failed to leave group in Redis"));
                 }
             };
             Ok(())
@@ -349,8 +349,8 @@ impl UnsendMetaStore for RedisMetaStore {
             let _ = match client.set::<(), String, String>(key, updated_value, None, None, false).await {
                 Ok(_val) => {},
                 Err(err) => {
-                  log::error!("Failed to set offset in Redis: {}", err);
-                  return Err(anyhow::anyhow!("Failed to set offset in Redis"));
+                  log::error!("Failed to update heartbeart in Redis: {}", err);
+                  return Err(anyhow::anyhow!("Failed to update heartbeart in Redis"));
                 }
             };
             Ok(Some(consumer_group))
@@ -380,8 +380,8 @@ impl UnsendMetaStore for RedisMetaStore {
             let _ = match client.set::<(), String, String>(key, updated_value, None, None, false).await {
                 Ok(_val) => {},
                 Err(err) => {
-                  log::error!("Failed to set offset in Redis: {}", err);
-                  return Err(anyhow::anyhow!("Failed to set offset in Redis"));
+                  log::error!("Failed to update consumer group member: {}", err);
+                  return Err(anyhow::anyhow!("Failed to set consumer group member in Redis"));
                 }
             };
             Ok(())
