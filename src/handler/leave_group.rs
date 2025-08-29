@@ -29,8 +29,12 @@ pub async fn handle_leave_group_request(
             log::debug!("Leaving group for member: {}", member.member_id);
             let mut response_member = MemberResponse::default();
             response_member.member_id = member.member_id.clone();
-            match meta_store.leave_group(request.group_id.as_str(), member.member_id.as_str()).await {
-                Ok(()) => {
+            let member_id = member.member_id.clone();
+            match meta_store.update_consumer_group(request.group_id.as_str(), move |mut cg| async move {
+                cg.members.retain(|m| m.member_id != member_id.as_str());
+                Ok(cg)
+            }).await {
+                Ok(_) => {
                     log::info!("Successfully left group: {}", request.group_id.as_str());
                     response_member.error_code = 0; // 0 means no error
                 },
@@ -45,8 +49,12 @@ pub async fn handle_leave_group_request(
         response.members = member_responses;
     } else {
         log::info!("Member ID: {}", request.member_id);
-        match meta_store.leave_group(request.group_id.as_str(), request.member_id.as_str()).await {
-            Ok(()) => {
+        let member_id = request.member_id.clone();match
+        meta_store.update_consumer_group(request.group_id.as_str(), move |mut cg| async move {
+            cg.members.retain(|m| m.member_id != member_id.as_str());
+            Ok(cg)
+        }).await {
+            Ok(_) => {
                 log::info!("Successfully left group: {}", request.group_id.as_str());
                 response.error_code = 0; // 0 means no error
             },

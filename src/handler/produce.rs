@@ -55,20 +55,19 @@ pub async fn handle_produce_request(
             let mut partition_produce_response = PartitionProduceResponse::default();
             partition_produce_response.index = request_partition_data.index;
 
-            let topic_info = meta_store.get_topic(Some(topic_data.name.clone().as_str()), None).await
-                .map_err(|e| {
-                    log::error!("Failed to get topic info: {:?}", e);
-                    ResponseError::UnknownTopicOrPartition
-                })?;
-
-            let topic_id = topic_info
-                .as_ref()
-                .ok_or_else(|| {
-                    log::error!("Topic info is None");
-                    ResponseError::UnknownTopicOrPartition
-                })?
-                .topic_id;
-
+            let topic_id = meta_store.get_topic_id_by_topic_name(topic_data.name.as_str()).await?;
+            let topic_id = match topic_id {
+                Some(id) => id,
+                None => {
+                    log::error!("Topic not found: {}", topic_data.name.as_str());
+                    partition_produce_response.error_code = ResponseError::UnknownTopicOrPartition.code();
+                    partition_produce_response.base_offset = 0;
+                    partition_produce_response.log_append_time_ms = 0;
+                    partition_produce_response.log_start_offset = -1;
+                    partition_responses.push(partition_produce_response);
+                    continue;
+                }
+            };
 
             let lock_start = Instant::now();
             // lock index store

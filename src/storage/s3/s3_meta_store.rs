@@ -4,7 +4,7 @@ use crate::common::utils::jittered_delay;
 use crate::storage::s3::s3_client::S3Client;
 use crate::traits::meta_store::UnsendMetaStore;
 use crate::common::topic_partition::Topic;
-use crate::common::consumer::{ConsumerGroup, ConsumerGroupMember};
+use crate::common::consumer::ConsumerGroup;
 
 pub struct S3MetaStore {
     s3_client: S3Client,
@@ -25,7 +25,7 @@ impl S3MetaStore {
 }
 
 impl UnsendMetaStore for S3MetaStore {
-    async fn save_topic_partition(&self, data: &crate::common::topic_partition::Topic) -> Result<()> {
+    async fn put_topic(&self,data: &Topic) -> Result<()> {
         let object_key = self.metadata_key(format!("topic-{}", data.topic_id));
         let value = serde_json::to_string(data)?;
         let value_bytes = value.as_bytes().to_vec();
@@ -40,34 +40,12 @@ impl UnsendMetaStore for S3MetaStore {
         Ok(())
     }
 
-    async fn get_topic(&self, name: Option<&str>, topic_id: Option<&str>) -> Result<Option<Topic>> {
-        let object_key = match topic_id {
-            Some(id) => self.metadata_key(format!("topic-{}", id)),
-            None => {
-                if let Some(name) = name {
-                    // TODO: find id by name
-                    self.metadata_key(format!("topic-{}", name))
-                } else {
-                    return Ok(None);
-                }
-            }
-        };
+    async fn get_topic(&self, topic_id: &str) -> Result<Topic> {
+        let object_key = self.metadata_key(format!("topic-{}", topic_id));
         let (data, _) = self.s3_client.get_object(&self.bucket, &object_key).await?;
         let topic: Topic = serde_json::from_slice(&data)?;
         log::debug!("Successfully retrieved topic from S3: {}", object_key);
-        Ok(Some(topic))
-    }
-
-    async fn delete_topic_by_name(&self, name: &str) -> Result<()> {
-        // TODO: Find id by name
-        let object_key = self.metadata_key(format!("topic-{}", name));
-        self.s3_client.delete_object(&self.bucket, &object_key).await
-            .map_err(|e| {
-                log::error!("Failed to delete topic from S3: {:?}", e);
-                e
-            })?;
-        log::debug!("Successfully deleted topic from S3: {}", object_key);
-        Ok(())
+        Ok(topic)
     }
 
     async fn delete_topic_by_id(&self, topic_id: uuid::Uuid) -> Result<()> {
@@ -81,7 +59,7 @@ impl UnsendMetaStore for S3MetaStore {
         Ok(())
     }
 
-    async fn get_all_topics(&self) -> Result<Vec<Topic>> {
+    async fn get_topics(&self) -> Result<Vec<Topic>> {
         let topic_list = self.s3_client.list_objects(
             &self.bucket,
             self.prefix.as_deref()
@@ -165,106 +143,34 @@ impl UnsendMetaStore for S3MetaStore {
         }
     }
 
-    async fn update_heartbeat(&self, group_id: &str) -> Result<Option<ConsumerGroup>> {
-        // update the heartbeart for the consumer group
-        let object_key = self.metadata_key(format!("consumer-group-{}", group_id));
-        let lock_key = self.metadata_key(format!("lock-consumer-group-{}", group_id));
-
-        self.acquire_lock(&self.bucket, &lock_key).await?;
-        let mut group = self.get_consumer_group(group_id).await?;
-        if let Some(ref mut group) = group {
-            group.update_group_status(10);
-            let value = serde_json::to_string(group)?;
-            let value_bytes = value.into_bytes(); // Vec<u8>
-            self.s3_client.put_object(&self.bucket, &object_key, &value_bytes, None).await?;
-            log::debug!("Successfully updated heartbeat for consumer group: {}", group_id);
-        } else {
-            log::warn!("Consumer group not found for heartbeat update: {}", group_id);
-        }
-        self.release_lock(&self.bucket, &lock_key).await?;
-        Ok(group)
-    }
-
-    async fn offset_commit(&self, group_id: &str, topic: &str, partition: i32, offset: i64) -> Result<()> {
-        let object_key = self.metadata_key(format!("consumer-group-{}", group_id));
-        let lock_key = self.metadata_key(format!("lock-consumer-group-{}", group_id));
-        // Acquire lock before writing
-        self.acquire_lock(&self.bucket, &lock_key).await?;
-        let mut group = self.get_consumer_group(group_id).await?;
-        if let Some(ref mut group) = group {
-            group.update_offset(topic, partition, offset);
-            let value = serde_json::to_string(group)?;
-            let value_bytes = value.into_bytes(); // Vec<u8>
-            self.s3_client.put_object(&self.bucket, &object_key, &value_bytes, None).await?;
-            log::debug!("Successfully committed offset for group: {}, topic: {}, partition: {}", group_id, topic, partition);
-        } else {
-            log::warn!("Consumer group not found for offset commit: {}", group_id);
-        }
-        self.release_lock(&self.bucket, &lock_key).await?;
-        Ok(())
-    }
-
-    async fn leave_group(&self, group_id: &str, member_id: &str) -> Result<()> {
-        let object_key = self.metadata_key(format!("consumer-group-{}", group_id));
-        let lock_key = self.metadata_key(format!("lock-consumer-group-{}", group_id));
-        // Acquire lock before writing
-        self.acquire_lock(&self.bucket, &lock_key).await?;
-        let mut group = self.get_consumer_group(group_id).await?;
-        if let Some(ref mut group) = group {
-            group.members.retain(|m| m.member_id != member_id);
-            let value = serde_json::to_string(group)?;
-            let value_bytes = value.into_bytes(); // Vec<u8>
-            self.s3_client.put_object(&self.bucket, &object_key, &value_bytes, None).await?;
-            log::debug!("Successfully removed member {} from group {}", member_id, group_id);
-        } else {
-            log::warn!("Consumer group not found for leave group: {}", group_id);
-        }
-        self.release_lock(&self.bucket, &lock_key).await?;
-        Ok(())
-    }
-
-    async fn update_heartbeat_by_member_id(&self, group_id: &str, member_id: &str) -> Result<Option<ConsumerGroup>> {
+    async fn update_consumer_group<F,Fut>(&self,group_id: &str,update_fn:F,) -> Result<Option<ConsumerGroup> >
+        where F:FnOnce(ConsumerGroup) -> Fut+Send+'static,Fut:std::future::Future<Output = Result<ConsumerGroup>> +Send+'static {
         let object_key = self.metadata_key(format!("consumer-group-{}", group_id));
         let lock_key = self.metadata_key(format!("lock-consumer-group-{}", group_id));
         // Acquire lock before writing
         self.acquire_lock(&self.bucket, &lock_key).await?;
         let mut group = self.get_consumer_group(group_id).await?;
         let updated_group = if let Some(ref mut group) = group {
-            // Find the member and update its last heartbeat
-            if let Some(member) = group.members.iter_mut().find(|m| m.member_id == member_id) {
-                member.last_heartbeat = std::time::SystemTime::now();
+            // Apply the update function
+            match update_fn(group.clone()).await {
+                Ok(updated) => {
+                    let value = serde_json::to_string(&updated)?;
+                    let value_bytes = value.into_bytes(); // Vec<u8>
+                    self.s3_client.put_object(&self.bucket, &object_key, &value_bytes, None).await?;
+                    log::debug!("Successfully updated consumer group via closure: {}", group_id);
+                    Some(updated)
+                },
+                Err(e) => {
+                    log::error!("Failed to apply update function for consumer group {}: {:?}", group_id, e);
+                    None
+                }
             }
-            let value = serde_json::to_string(group)?;
-            let value_bytes = value.into_bytes(); // Vec<u8>
-            self.s3_client.put_object(&self.bucket, &object_key, &value_bytes, None).await?;
-            log::debug!("Successfully updated heartbeat for member {} in group {}", member_id, group_id);
-            Some(group.clone())
         } else {
-            log::warn!("Consumer group not found for heartbeat update by member ID: {}", group_id);
+            log::warn!("Consumer group not found for closure update: {}", group_id);
             None
         };
         self.release_lock(&self.bucket, &lock_key).await?;
         Ok(updated_group)
-    }
-
-    async fn update_consumer_group_member(&self, group_id: &str, member: &ConsumerGroupMember) -> Result<()> {
-        let object_key = self.metadata_key(format!("consumer-group-{}", group_id));
-        let lock_key = self.metadata_key(format!("lock-consumer-group-{}", group_id));
-        // Acquire lock before writing
-        self.acquire_lock(&self.bucket, &lock_key).await?;
-        let mut group = self.get_consumer_group(group_id).await?;
-        if let Some(ref mut group) = group {
-            // Update or add the member
-            group.upsert_member(member.clone());
-            let value = serde_json::to_string(group)?;
-            let value_bytes = value.into_bytes(); // Vec<u8>
-            self.s3_client.put_object(&self.bucket, &object_key, &value_bytes, None).await?;
-            log::debug!("Successfully updated consumer group member: {}", member.member_id);
-        } else {
-            log::warn!("Consumer group not found for leave group: {}", group_id);
-        }
-        self.release_lock(&self.bucket, &lock_key).await?;
-        Ok(())
     }
 
     async fn gen_producer_id(&self) -> Result<i64> {
