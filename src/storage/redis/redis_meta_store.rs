@@ -1,7 +1,7 @@
 use crate::common::utils::jittered_delay;
 use crate::traits::meta_store::UnsendMetaStore;
 use crate::common::topic_partition::Topic;
-use crate::common::consumer::{ConsumerGroup, ConsumerGroupMember};
+use crate::common::consumer::ConsumerGroup;
 use std::time::Duration;
 use anyhow::Result;
 use tokio::time::sleep;
@@ -35,7 +35,7 @@ impl RedisMetaStore {
 }
 
 impl UnsendMetaStore for RedisMetaStore {
-    async fn save_topic_partition(&self, data: &Topic) -> Result<()> {
+    async fn put_topic(&self, data: &Topic) -> Result<()> {
         // set the topic information in Redis
         // using the topic name as the key and the serialized data as the value
         let key = format!("topic:{}", data.topic_id);
@@ -61,62 +61,17 @@ impl UnsendMetaStore for RedisMetaStore {
         Ok(())
     }
 
-    async fn get_topic(&self, name: Option<&str>, topic_id: Option<&str>) -> Result<Option<Topic>> {
+    async fn get_topic(&self, topic_id: &str) -> Result<Topic> {
         // get the topic information from Redis
-        if let Some(name) = name {
-            match self.get_topic_id_by_name(name).await? {
-                Some(topic_id) => {
-                    let key = format!("topic:{}", topic_id);
-                    // Get the topic by ID
-                    let maybe_value: Option<String> = self.client.get(&key).await?;
-                    let value = match maybe_value {
-                        Some(v) => v,
-                        None => return Ok(None),
-                    };
-                    let topic: Topic = serde_json::from_str(&value)?;
-                    return Ok(Some(topic));
-                },
-                None => {
-                    return Ok(None);
-                }
-            }
-       } else if let Some(topic_id) = topic_id {
-            // If topic_id is provided, search topic by topic_id
-            let key = format!("topic:{}", topic_id);
-            // Get the topic data from Redis
-            let maybe_value: Option<String> = self.client.get(&key).await?;
-            let value = match maybe_value {
-                Some(v) => v,
-                None => return Ok(None),
-            };
-            let topic: Topic = serde_json::from_str(&value)?;
-            return Ok(Some(topic));
-        }
-        Ok(None)
-    }
-
-    async fn delete_topic_by_name(&self, name: &str) -> Result<()> {
-        match self.get_topic_id_by_name(name).await? {
-            Some(topic_id) => {
-                // If topic_id is found, delete the topic by ID
-                let key = format!("topic:{}", topic_id);
-                match self.client.del(&key).await? {
-                    0 => {
-                        // If no keys were deleted, it means the topic does not exist
-                        return Err(anyhow::anyhow!("Topic not found with name: {}", name));
-                    },
-                    _ => {
-                        // Successfully deleted the topic
-                        log::info!("Deleted topic with name: {}", name);
-                    }
-                }
-                Ok(())
-            }
-            None => {
-                // If no topic found with the given name, return an error
-                Err(anyhow::anyhow!("Topic not found with name: {}", name))
-            }
-        }
+        let key = format!("topic:{}", topic_id);
+        // Get the topic data from Redis
+        let maybe_value: Option<String> = self.client.get(&key).await?;
+        let value = match maybe_value {
+            Some(v) => v,
+            None => return Err(anyhow::anyhow!("Topic not found with ID: {}", topic_id)),
+        };
+        let topic: Topic = serde_json::from_str(&value)?;
+        return Ok(topic);
     }
 
     async fn delete_topic_by_id(&self, topic_id: uuid::Uuid) -> Result<()> {
@@ -135,7 +90,7 @@ impl UnsendMetaStore for RedisMetaStore {
         Ok(())
     }
 
-    async fn get_all_topics(&self) -> Result<Vec<Topic>> {
+    async fn get_topics(&self) -> Result<Vec<Topic>> {
         let max_align_topics = 1000000; // Arbitrary large number to limit the scan
         
         let keys: Vec<String> = self.scan_keys("topic:*", max_align_topics).await?;
@@ -219,175 +174,6 @@ impl UnsendMetaStore for RedisMetaStore {
         Ok(result)
     }
 
-    async fn update_heartbeat(&self, group_id: &str) -> Result<Option<ConsumerGroup>> {
-        // update the heartbeart for the consumer group
-        let key = format!("consumer_group:{}", group_id);
-        let lock_key = format!("lock:consumer_group:{}", group_id);
-        log::debug!("Updating heartbeat for consumer group: {}", group_id);
-
-        let result = self.with_redis_lock(self.client.clone(), &lock_key, self.ttl_secs, |client| async move {
-            log::debug!("Acquiring lock for consumer group: {}", key);
-            let maybe_value: Option<String> = match client.get(&key).await {
-                Ok(val) => val,
-                Err(e) => {
-                    log::error!("❌ Failed to get key {} from Redis: {}", key, e);
-                    return Err(anyhow::anyhow!("Redis GET error: {}", e));
-                }
-            };
-            let value = match maybe_value {
-                Some(v) => v,
-                None => {
-                    log::warn!("Consumer group not found for key: {}", key);
-                    return Ok(None); // or your preferred fallback
-                }
-            };
-            let mut consumer_group: ConsumerGroup = match serde_json::from_str(&value) {
-                Ok(group) => group,
-                Err(e) => {
-                    log::error!("❌ Failed to deserialize ConsumerGroup: {}", e);
-                    return Err(anyhow::anyhow!("Deserialize error: {}", e));
-                }
-            };
-            log::debug!("Before Updated value for consumer group: {:?}", consumer_group);
-            // Set an expiration time for the lock
-            consumer_group.update_group_status(10); // Assuming 10 seconds as heartbeat timeout
-            // Save the updated consumer group back to Redis
-            let updated_value = serde_json::to_string(&consumer_group)?;
-            log::debug!("Updated value for consumer group: {}", updated_value);
-            let _ = match client.set::<(), String, String>(key, updated_value, None, None, false).await {
-                Ok(_val) => {},
-                Err(err) => {
-                  log::error!("Failed to set offset in Redis: {}", err);
-                  return Err(anyhow::anyhow!("Failed to set offset in Redis"));
-                }
-            };
-            Ok(Some(consumer_group))
-        }).await?;
-        Ok(result)
-    }
-
-    async fn offset_commit(&self, group_id: &str, topic: &str, partition: i32, offset: i64) -> Result<()> {
-        // get consumer group and update offset
-        let key = format!("consumer_group:{}", group_id);
-        let lock_key: String = format!("lock:consumer_group:{}", group_id);
-
-        let topic = topic.to_string();
-        self.with_redis_lock(self.client.clone(), &lock_key, self.ttl_secs, move |client| async move {
-            let maybe_value: Option<String> = client.get(&key).await?;
-            let value = match maybe_value {
-                Some(v) => v,
-                None => {
-                    return Err(anyhow::anyhow!("Consumer group not found: {}", key));
-                }
-            };
-            let mut consumer_group: ConsumerGroup = serde_json::from_str(&value)?;
-            // Update the offset for the specified topic and partition
-            consumer_group.update_offset(&topic, partition, offset);
-            // Save the updated consumer group back to Redis
-            let updated_value = serde_json::to_string(&consumer_group)?;
-            let _ = match client.set::<(), String, String>(key, updated_value, None, None, false).await {
-                Ok(_val) => {},
-                Err(err) => {
-                  log::error!("Failed to set offset in Redis: {}", err);
-                  return Err(anyhow::anyhow!("Failed to set offset in Redis"));
-                }
-            };
-            Ok(())
-        }).await
-    }
-
-    async fn leave_group(&self, group_id: &str, member_id: &str) -> Result<()> {
-        // Remove the member from the consumer group
-        let key = format!("consumer_group:{}", group_id);
-        let lock_key = format!("lock:consumer_group:{}", group_id);
-        let member_id = member_id.to_string();
-        self.with_redis_lock(self.client.clone(), &lock_key, self.ttl_secs, move |client| async move {
-            let maybe_value: Option<String> = client.get(&key).await?;
-            let value = match maybe_value {
-                Some(v) => v,
-                None => {
-                    return Err(anyhow::anyhow!("Consumer group not found: {}", key));
-                }
-            };
-            let mut consumer_group: ConsumerGroup = serde_json::from_str(&value)?;
-            // Remove the member by ID
-            consumer_group.members.retain(|m| m.member_id != member_id);
-            // Save the updated consumer group back to Redis
-            let updated_value = serde_json::to_string(&consumer_group)?;
-            let _ = match client.set::<(), String, String>(key, updated_value, None, None, false).await {
-                Ok(_val) => {},
-                Err(err) => {
-                  log::error!("Failed to leave group in Redis: {}", err);
-                  return Err(anyhow::anyhow!("Failed to leave group in Redis"));
-                }
-            };
-            Ok(())
-        }).await
-    }
-
-    async fn update_heartbeat_by_member_id(&self, group_id: &str, member_id: &str) -> Result<Option<ConsumerGroup>> {
-        // Update the heartbeat for a specific member in the consumer group
-        let key = format!("consumer_group:{}", group_id);
-        let lock_key = format!("lock:consumer_group:{}", group_id);
-        let member_id = member_id.to_string();
-        let result = self.with_redis_lock(self.client.clone(), &lock_key, self.ttl_secs, move |client| async move {
-            let maybe_value: Option<String> = client.get(&key).await?;
-            let value = match maybe_value {
-                Some(v) => v,
-                None => {
-                    log::warn!("Consumer group not found for key: {}", key);
-                    return Ok(None); // or your preferred fallback
-                }
-            };
-            let mut consumer_group: ConsumerGroup = serde_json::from_str(&value)?;
-            // Find the member and update its last heartbeat
-            if let Some(member) = consumer_group.members.iter_mut().find(|m| m.member_id == member_id) {
-                member.last_heartbeat = std::time::SystemTime::now();
-            }
-            // Save the updated consumer group back to Redis
-            let updated_value = serde_json::to_string(&consumer_group)?;
-            let _ = match client.set::<(), String, String>(key, updated_value, None, None, false).await {
-                Ok(_val) => {},
-                Err(err) => {
-                  log::error!("Failed to update heartbeart in Redis: {}", err);
-                  return Err(anyhow::anyhow!("Failed to update heartbeart in Redis"));
-                }
-            };
-            Ok(Some(consumer_group))
-        }).await?;
-        Ok(result)
-    }
-
-    async fn update_consumer_group_member(&self, group_id: &str, member: &ConsumerGroupMember) -> Result<()> {
-        let key = format!("consumer_group:{}", group_id);
-        let lock_key = format!("lock:consumer_group:{}", group_id);
-        let member = member.clone();
-        self.with_redis_lock(self.client.clone(), &lock_key, self.ttl_secs, move |client| async move {
-            let maybe_value: Option<String> = client.get(&key).await?;
-            let value = match maybe_value {
-                Some(v) => v,
-                None => {
-                    return Err(anyhow::anyhow!("Consumer group not found: {}", key));
-                }
-            };
-            let mut consumer_group: ConsumerGroup = serde_json::from_str(&value)?;
-            log::debug!("Before updating member: {:?}", consumer_group);
-            // Update or add the member
-            consumer_group.upsert_member(member);
-            // Save the updated consumer group back to Redis
-            let updated_value = serde_json::to_string(&consumer_group)?;
-            log::debug!("Updated consumer group member: {:?}", updated_value);
-            let _ = match client.set::<(), String, String>(key, updated_value, None, None, false).await {
-                Ok(_val) => {},
-                Err(err) => {
-                  log::error!("Failed to update consumer group member: {}", err);
-                  return Err(anyhow::anyhow!("Failed to set consumer group member in Redis"));
-                }
-            };
-            Ok(())
-        }).await
-    }
-
     async fn gen_producer_id(&self) -> Result<i64> {
         let key = "producer_id_counter01";
         let lock_key = format!("lock:{}", key);
@@ -398,6 +184,34 @@ impl UnsendMetaStore for RedisMetaStore {
             Ok(id)
         }).await?;
         Ok(result)
+    }
+
+    async fn update_consumer_group<F, Fut>(&self, group_id: &str, update_fn: F) -> Result<Option<ConsumerGroup>>
+    where
+        F: FnOnce(ConsumerGroup) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = Result<ConsumerGroup>> + Send + 'static,
+    {
+        let key = format!("consumer_group:{}", group_id);
+        let lock_key = format!("lock:consumer_group:{}", group_id);
+
+        self.with_redis_lock(self.client.clone(), &lock_key, self.ttl_secs, move |client| async move {
+            let maybe_value: Option<String> = client.get(&key).await?;
+            let value = match maybe_value {
+                Some(v) => v,
+                None => return Ok(None),
+            };
+
+            let cg: ConsumerGroup = serde_json::from_str(&value)
+                .map_err(|e| anyhow::anyhow!("Deserialize ConsumerGroup: {}", e))?;
+
+            let cg  = update_fn(cg).await?;
+
+            let updated = serde_json::to_string(&cg)?;
+            client.set::<(), String, String>(key, updated, None, None, false).await
+                .map_err(|e| anyhow::anyhow!("Redis SET error: {}", e))?;
+
+            Ok(Some(cg))
+        }).await
     }
 }
 
@@ -476,14 +290,5 @@ impl RedisMetaStore {
         }
 
         result
-    }
-
-    async fn get_topic_id_by_name(
-        &self,
-        name: &str,
-    ) -> Result<Option<String>> {
-        let index_key = format!("topic_index:name:{}", name);
-        let topic_ids: Vec<String> = self.client.smembers(&index_key).await?;
-        Ok(topic_ids.into_iter().next())
     }
 }

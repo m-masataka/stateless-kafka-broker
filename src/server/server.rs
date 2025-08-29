@@ -26,7 +26,6 @@ use anyhow::{Ok, Result};
 use nix::sys::socket::{setsockopt, sockopt};
 use tokio::{
     net::TcpStream,
-    sync::mpsc,
     io::AsyncReadExt,
 };
 use std::sync::Arc;
@@ -53,7 +52,6 @@ use kafka_protocol::messages::{
 };
 use kafka_protocol::protocol::Decodable;
 use tokio::io::AsyncWriteExt;
-use tokio::time::{sleep, Duration};
 
 pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
     env_logger::init();
@@ -336,7 +334,7 @@ async fn handle_connection(stream: tokio::net::TcpStream,
             }
         };
         match response {
-            std::result::Result::Ok(mut bytes) => {
+            std::result::Result::Ok(bytes) => {
                 log::debug!("Response length: {}", bytes.len());
 
                 if bytes.len() >= 8 {

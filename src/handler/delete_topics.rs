@@ -77,17 +77,44 @@ async fn delete_topic_by_name(
     meta_store: &MetaStoreImpl,
 ) -> DeletableTopicResult {
     log::debug!("Deleting topic by name: {}", name);
-    match meta_store.delete_topic_by_name(name).await {
-        Ok(_) => {
-            log::info!("Successfully deleted topic: {}", name);
+    let topic_id = match meta_store.get_topic_id_by_topic_name(name).await {
+        Ok(Some(id_str)) => match uuid::Uuid::parse_str(&id_str) {
+            Ok(uuid) => uuid,
+            Err(e) => {
+                log::error!("Failed to parse topic ID '{}' as UUID: {:?}", id_str, e);
+                let mut result = DeletableTopicResult::default();
+                result.name = Some(TopicName(name.to_string().into()));
+                result.error_code = UnknownTopicOrPartition.code();
+                return result;
+            }
+        },
+        Ok(None) => {
+            log::warn!("Topic not found: {}", name);
             let mut result = DeletableTopicResult::default();
             result.name = Some(TopicName(name.to_string().into()));
+            result.error_code = UnknownTopicOrPartition.code();
+            return result;
+        }
+        Err(e) => {
+            log::error!("Error retrieving topic ID for {}: {:?}", name, e);
+            let mut result = DeletableTopicResult::default();
+            result.name = Some(TopicName(name.to_string().into()));
+            result.error_code = UnknownTopicOrPartition.code();
+            return result
+        }
+    };
+    match meta_store.delete_topic_by_id(topic_id).await {
+        Ok(_) => {
+            log::info!("Successfully deleted topic: {}", topic_id);
+            let mut result = DeletableTopicResult::default();
+            result.name = Some(TopicName(name.to_string().into()));
+            result.topic_id = topic_id;
             result.error_code = 0; // 0 means no error
             result.topic_id = uuid::Uuid::new_v4(); // topic_id is not used in this version
             result
         },
         Err(e) => {
-            log::error!("Failed to delete topic {}: {:?}", name, e);
+            log::error!("Failed to delete topic {}: {:?}", topic_id, e);
             let mut result = DeletableTopicResult::default();
             result.name = Some(TopicName(name.to_string().into()));
             result.error_code = UnknownTopicOrPartition.code();

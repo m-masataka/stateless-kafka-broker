@@ -24,7 +24,14 @@ pub async fn handle_consumer_group_heartbeat_request(
     let mut response = ConsumerGroupHeartbeatResponse::default();
     response.throttle_time_ms = 0;
 
-    let consumer_group = match meta_store.update_heartbeat_by_member_id(&request.group_id, &request.member_id.as_str()).await {
+    let member_id = request.member_id.as_str().to_string().to_owned();
+    let consumer_group = match meta_store.update_consumer_group(&request.group_id, move |mut cg| async move {
+        // Find the member and update its last heartbeat
+        if let Some(member) = cg.members.iter_mut().find(|m| m.member_id == member_id) {
+            member.last_heartbeat = std::time::SystemTime::now();
+        }
+        Ok(cg)
+    }).await {
         Ok(cg) => {
             match cg {
                 Some(group) => {

@@ -28,7 +28,10 @@ pub async fn handle_join_group_request(
     // Get the consumer group from the meta store
     let group_id = request.group_id.clone();
     // Update the heartbeat for the consumer group
-    let mut consumer_group = meta_store.update_heartbeat(group_id.as_str()).await?;
+    let mut consumer_group = meta_store.update_consumer_group(group_id.as_str(), move |mut cg| async move {
+        cg.update_group_status(10);
+        Ok(cg)
+    }).await?;
     log::debug!("Consumer group after heartbeat check: {:?}", consumer_group);
 
     let response = if let Some(store_group) = consumer_group.as_mut() {

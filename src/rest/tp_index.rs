@@ -13,7 +13,7 @@ use crate::server::loader::{
 pub async fn get_tp_offsets(State(st): State<AppState>) -> Json<serde_json::Value>{
     let meta_store = load_meta_store(&st.config).await.unwrap();
     let index_store = load_index_store(&st.config).await.unwrap();
-    let topics = meta_store.get_all_topics().await.unwrap_or_default();
+    let topics = meta_store.get_topics().await.unwrap_or_default();
     log::debug!("Retrieved topics: {:?}", topics);
     let mut res_topics = Vec::new();
     for topic in &topics {
