@@ -16,7 +16,10 @@ use crate::storage::{
         redis_meta_store::RedisMetaStore,
         redis_index_store::RedisIndexStore,
     },
-    tikv::tikv_meta_store::TikvMetaStore,
+    tikv::{
+        tikv_meta_store::TikvMetaStore,
+        tikv_index_store::TikvIndexStore,
+    },
 };
 use crate::common::config::StorageType;
 use anyhow::Result;
@@ -103,6 +106,13 @@ pub async fn load_index_store(server_config: &ServerConfig) -> Result<IndexStore
             init_with_retry(&redis_client, 0, 1000, 30_000, 3).await?;
             // redis_client.init().await.expect("Failed to connect to redis");
             IndexStoreImpl::Redis(RedisIndexStore::new(redis_client))
+        },
+        StorageType::Tikv => {
+            log::debug!("Using TiKV index store");
+            let tikv_endpoints = server_config.meta_store_tikv_endpoints.clone().ok_or_else(|| anyhow::anyhow!("TiKV endpoints not configured"))?;
+            let tikv_endpoint_vec = tikv_endpoints.split(',').map(|s| s.trim().to_string()).collect::<Vec<String>>();
+            let tikv_client = tikv_client::TransactionClient::new(tikv_endpoint_vec).await?;
+            IndexStoreImpl::Tikv(TikvIndexStore::new(tikv_client))
         },
         _ => {
             return Err(anyhow::anyhow!("Unsupported index store backend"));

@@ -52,7 +52,7 @@ impl TikvMetaStore {
                 Err(e) => {
                     if let Some(te) = e.downcast_ref::<TikvError>() {
                         match te {
-                            TikvError::KvError { message } if message.contains("Write conflict") => {
+                            TikvError::KvError { message } if message.contains("conflict") => {
                                 last_err = Some(e);
                                 sleep(Duration::from_millis(backoff_ms)).await;
                                 backoff_ms = (backoff_ms * 2).min(1000);
@@ -70,28 +70,28 @@ impl TikvMetaStore {
 
     /// prefix scan with limit
     async fn scan_prefix(&self, prefix: &str, limit: usize) -> Result<Vec<KvPair>> {
-        let start = Key::from(prefix.as_bytes().to_vec());
+        let start_key = Key::from(prefix.as_bytes().to_vec());
         let end_raw = prefix_end(prefix.as_bytes().to_vec());
-        let range = if end_raw.is_empty() {
-            (Bound::Included(start.clone()), Bound::Unbounded)
+        let end_bound = if end_raw.is_empty() {
+            Bound::Unbounded
         } else {
-            (Bound::Included(start.clone()), Bound::Excluded(Key::from(end_raw)))
+            Bound::Excluded(Key::from(end_raw))
         };
 
         let mut out = Vec::new();
         let mut txn = self.client.begin_optimistic().await?;
-        let mut start_key = Some(start);
+        let mut start_bound = Bound::Included(start_key);
+
         loop {
-            let scan_range = (
-                Bound::Included(start_key.clone().unwrap()),
-                range.1.clone(),
-            );
-            let batch: Vec<KvPair> = txn
-                .scan(scan_range, limit as u32)
+            let batch: Vec<KvPair> = txn.scan((start_bound.clone(), end_bound.clone()), limit as u32)
                 .await?
                 .collect();
+
             if batch.is_empty() { break; }
-            start_key = batch.last().map(|kv| Key::from(kv.0.clone()));
+            // 次回は最後のキーの「直後」から
+            let last_key = batch.last().unwrap().0.clone();
+            start_bound = Bound::Excluded(last_key);
+
             out.extend(batch);
             if out.len() >= limit { break; }
         }
@@ -181,8 +181,8 @@ impl UnsendMetaStore for TikvMetaStore {
             .and_then(|kv| {
                 // key = ...:{name}:{id} → extract id
                 let key_bytes: &[u8] = (&kv.0).into();
-                let k = String::from_utf8_lossy(key_bytes).to_string();
-                k.rsplit(':').next().map(|s| s.to_string())
+                let key_str = std::str::from_utf8(key_bytes).ok()?;
+                key_str.strip_prefix(&prefix).map(|s| s.to_string())
             });
         Ok(id)
     }
