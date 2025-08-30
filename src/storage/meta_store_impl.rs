@@ -2,6 +2,7 @@ use crate::storage::redis::redis_meta_store::RedisMetaStore;
 use crate::traits::meta_store::{UnsendMetaStore, MetaStore};
 use crate::storage::file::file_meta_store::FileMetaStore;
 use crate::storage::s3::s3_meta_store::S3MetaStore;
+use crate::storage::tikv::tikv_meta_store::TikvMetaStore;
 use crate::common::{
     topic_partition::Topic,
     consumer::ConsumerGroup,
@@ -12,6 +13,7 @@ pub enum MetaStoreImpl {
     File(FileMetaStore),
     S3(S3MetaStore),
     Redis(RedisMetaStore),
+    Tikv(TikvMetaStore),
 }
 
 impl MetaStore for MetaStoreImpl {
@@ -20,6 +22,7 @@ impl MetaStore for MetaStoreImpl {
             MetaStoreImpl::File(f) => f.put_topic(data).await,
             MetaStoreImpl::S3(s) => s.put_topic(data).await,
             MetaStoreImpl::Redis(r) => r.put_topic(data).await,
+            MetaStoreImpl::Tikv(t) => t.put_topic(data).await,
         }
     }
 
@@ -28,6 +31,7 @@ impl MetaStore for MetaStoreImpl {
             MetaStoreImpl::File(f) => f.get_topic(topic_id).await,
             MetaStoreImpl::S3(s) => s.get_topic(topic_id).await,
             MetaStoreImpl::Redis(r) => r.get_topic(topic_id).await,
+            MetaStoreImpl::Tikv(t) => t.get_topic(topic_id).await,
         }
     }
 
@@ -36,6 +40,7 @@ impl MetaStore for MetaStoreImpl {
             MetaStoreImpl::File(f) => f.delete_topic_by_id(topic_id).await,
             MetaStoreImpl::S3(s) => s.delete_topic_by_id(topic_id).await,
             MetaStoreImpl::Redis(r) => r.delete_topic_by_id(topic_id).await,
+            MetaStoreImpl::Tikv(t) => t.delete_topic_by_id(topic_id).await,
         }
     }
 
@@ -44,6 +49,7 @@ impl MetaStore for MetaStoreImpl {
             MetaStoreImpl::File(f) => f.get_topics().await,
             MetaStoreImpl::S3(s) => s.get_topics().await,
             MetaStoreImpl::Redis(r) => r.get_topics().await,
+            MetaStoreImpl::Tikv(t) => t.get_topics().await,
         }
     }
 
@@ -52,6 +58,7 @@ impl MetaStore for MetaStoreImpl {
             MetaStoreImpl::File(f) => f.get_topic_id_by_topic_name(topic_name).await,
             MetaStoreImpl::S3(s) => s.get_topic_id_by_topic_name(topic_name).await,
             MetaStoreImpl::Redis(r) => r.get_topic_id_by_topic_name(topic_name).await,
+            MetaStoreImpl::Tikv(t) => t.get_topic_id_by_topic_name(topic_name).await,
         }
     }
 
@@ -60,6 +67,7 @@ impl MetaStore for MetaStoreImpl {
             MetaStoreImpl::File(f) => f.save_consumer_group(data).await,
             MetaStoreImpl::S3(s) => s.save_consumer_group(data).await,
             MetaStoreImpl::Redis(r) => r.save_consumer_group(data).await,
+            MetaStoreImpl::Tikv(t) => t.save_consumer_group(data).await,
         }
     }
 
@@ -68,6 +76,7 @@ impl MetaStore for MetaStoreImpl {
             MetaStoreImpl::File(f) => f.get_consumer_groups().await,
             MetaStoreImpl::S3(s) => s.get_consumer_groups().await,
             MetaStoreImpl::Redis(r) => r.get_consumer_groups().await,
+            MetaStoreImpl::Tikv(t) => t.get_consumer_groups().await,
         }
     }
 
@@ -76,6 +85,7 @@ impl MetaStore for MetaStoreImpl {
             MetaStoreImpl::File(f) => f.get_consumer_group(group_id).await,
             MetaStoreImpl::S3(s) => s.get_consumer_group(group_id).await,
             MetaStoreImpl::Redis(r) => r.get_consumer_group(group_id).await,
+            MetaStoreImpl::Tikv(t) => t.get_consumer_group(group_id).await,
         }
     }
 
@@ -84,6 +94,7 @@ impl MetaStore for MetaStoreImpl {
             MetaStoreImpl::File(f) => f.gen_producer_id().await,
             MetaStoreImpl::S3(s) => s.gen_producer_id().await,
             MetaStoreImpl::Redis(r) => r.gen_producer_id().await,
+            MetaStoreImpl::Tikv(t) => t.gen_producer_id().await,
         }
     }
 
@@ -96,6 +107,7 @@ impl MetaStore for MetaStoreImpl {
             MetaStoreImpl::File(f) => f.update_consumer_group(group_id, update_fn).await,
             MetaStoreImpl::S3(s) => s.update_consumer_group(group_id, update_fn).await,
             MetaStoreImpl::Redis(r) => r.update_consumer_group(group_id, update_fn).await,
+            MetaStoreImpl::Tikv(t) => t.update_consumer_group(group_id, update_fn).await,
         }
     }
 }
