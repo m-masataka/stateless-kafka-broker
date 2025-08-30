@@ -109,7 +109,7 @@ pub async fn load_index_store(server_config: &ServerConfig) -> Result<IndexStore
         },
         StorageType::Tikv => {
             log::debug!("Using TiKV index store");
-            let tikv_endpoints = server_config.meta_store_tikv_endpoints.clone().ok_or_else(|| anyhow::anyhow!("TiKV endpoints not configured"))?;
+            let tikv_endpoints = server_config.index_store_tikv_endpoints.clone().ok_or_else(|| anyhow::anyhow!("TiKV endpoints not configured"))?;
             let tikv_endpoint_vec = tikv_endpoints.split(',').map(|s| s.trim().to_string()).collect::<Vec<String>>();
             let tikv_client = tikv_client::TransactionClient::new(tikv_endpoint_vec).await?;
             IndexStoreImpl::Tikv(TikvIndexStore::new(tikv_client))
