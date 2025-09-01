@@ -1,10 +1,8 @@
 use anyhow::{anyhow, Result};
 use std::ops::Bound;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-
-use tikv_client::{Key, KvPair, Transaction, TransactionClient, Error as TikvError};
-use tokio::time::sleep;
-
+use std::pin::Pin;
+use std::time::{SystemTime, UNIX_EPOCH};
+use tikv_client::{Key, KvPair, TransactionClient, Error as TikvError};
 use crate::traits::index_store::UnsendIndexStore;
 use crate::common::index::IndexData;
 
@@ -40,29 +38,34 @@ impl TikvIndexStore {
         Self { client }
     }
 
-    async fn with_txn_retry<F, Fut, T>(&self, mut f: F) -> Result<T>
+    // auto retry with exponential backoff
+    async fn with_txn_retry<F, T>(&self, mut f: F) -> Result<T>
     where
-        F: FnMut(Transaction) -> Fut,
-        Fut: std::future::Future<Output = Result<T>>,
+        F: for<'a> FnMut(
+            &'a mut tikv_client::Transaction
+        ) -> Pin<Box<dyn Future<Output = anyhow::Result<T>> + Send + 'a>>
+        + Send,
     {
         const MAX_RETRY: usize = 10;
         let mut backoff_ms = 20u64;
         let mut last_err: Option<anyhow::Error> = None;
 
         for _ in 0..MAX_RETRY {
-            let txn = self.client.begin_optimistic().await?;
-            match f(txn).await {
-                Ok(v) => return Ok(v),
+            let mut txn = self.client.begin_optimistic().await?;
+            match f(&mut txn).await {
+                Ok(v) => {
+                    txn.commit().await?;
+                    return Ok(v);
+                }
                 Err(e) => {
+                    let _ = txn.rollback().await;
+
                     if let Some(te) = e.downcast_ref::<TikvError>() {
-                        match te {
-                            TikvError::KvError { message, .. } if message.contains("conflict") => {
-                                last_err = Some(e);
-                                sleep(Duration::from_millis(backoff_ms)).await;
-                                backoff_ms = (backoff_ms * 2).min(1000);
-                                continue;
-                            }
-                            _ => return Err(e),
+                        if matches!(te, TikvError::KvError { message } if message.contains("conflict")) {
+                            last_err = Some(e);
+                            tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                            backoff_ms = (backoff_ms * 2).min(1000);
+                            continue;
                         }
                     }
                     return Err(e);
@@ -85,13 +88,12 @@ impl UnsendIndexStore for TikvIndexStore {
         offset: i64,
     ) -> anyhow::Result<()> {
         let key = k_offset(topic, partition);
-        self.with_txn_retry(|mut txn| {
+        self.with_txn_retry(|txn| {
             let key = key.clone();
-            async move {
+            Box::pin(async move {
                 txn.put(key, offset.to_string().into_bytes()).await?;
-                txn.commit().await?;
                 Ok(())
-            }
+            })
         }).await
     }
 
@@ -101,17 +103,16 @@ impl UnsendIndexStore for TikvIndexStore {
         partition: i32,
     ) -> anyhow::Result<i64> {
         let key = k_offset(topic, partition);
-        self.with_txn_retry(|mut txn| {
+        self.with_txn_retry(|txn| {
             let key = key.clone();
-            async move {
+            Box::pin(async move {
                 let v = txn.get(key).await?;
                 let ans = match v {
                     Some(bytes) => String::from_utf8(bytes).ok().and_then(|s| s.parse::<i64>().ok()).unwrap_or(-1),
                     None => -1,
                 };
-                txn.commit().await?;
                 Ok(ans)
-            }
+            })
         }).await
     }
 
@@ -126,24 +127,22 @@ impl UnsendIndexStore for TikvIndexStore {
         let expires = Self::now_ms() + timeout_secs * 1000;
         let value = format!("{lock_id}:{expires}");
 
-        let got = self.with_txn_retry(|mut txn| {
+        let got = self.with_txn_retry(|txn| {
             let key = key.clone();
             let value = value.clone();
-            async move {
+            Box::pin(async move {
                 if let Some(bytes) = txn.get(key.clone()).await? {
                     if let Ok(s) = String::from_utf8(bytes) {
                         if let Some((_id, exp)) = s.split_once(':') {
                             if exp.parse::<i64>().unwrap_or(0) > Self::now_ms() {
-                                txn.commit().await?;
                                 return Ok(false);
                             }
                         }
                     }
                 }
                 txn.put(key, value.into_bytes()).await?;
-                txn.commit().await?;
                 Ok(true)
-            }
+            })
         }).await?;
 
         Ok(if got { Some(lock_id) } else { None })
@@ -156,24 +155,22 @@ impl UnsendIndexStore for TikvIndexStore {
         lock_id: &str,
     ) -> anyhow::Result<bool> {
         let key = k_lock(topic, partition);
-        self.with_txn_retry(|mut txn| {
+        self.with_txn_retry(|txn| {
             let key = key.clone();
             let expect = lock_id.to_string();
-            async move {
+            Box::pin(async move {
                 if let Some(bytes) = txn.get(key.clone()).await? {
                     if let Ok(s) = String::from_utf8(bytes) {
                         if let Some((cur_id, _exp)) = s.split_once(':') {
                             if cur_id == expect {
                                 txn.delete(key).await?;
-                                txn.commit().await?;
                                 return Ok(true);
                             }
                         }
                     }
                 }
-                txn.commit().await?;
                 Ok(false)
-            }
+            })
         }).await
     }
 
@@ -187,16 +184,15 @@ impl UnsendIndexStore for TikvIndexStore {
         let enc = enc_offset(start_offset);
         let key = k_index(topic, partition, &enc);
         let val = serde_json::to_vec(data)?;
-        self.with_txn_retry(|mut txn| {
+        self.with_txn_retry(|txn| {
             let key = key.clone();
             let val = val.clone();
-            async move {
+            Box::pin(async move {
                 if txn.get(key.clone()).await?.is_none() {
                     txn.put(key, val).await?;
                 }
-                txn.commit().await?;
                 Ok(())
-            }
+            })
         }).await
     }
 
@@ -215,9 +211,12 @@ impl UnsendIndexStore for TikvIndexStore {
             (Bound::Included(start_key), Bound::Excluded(Key::from(end_raw)))
         };
 
-        let kvs: Vec<KvPair> = {
+        let (kvs, _finalized) = {
             let mut txn = self.client.begin_optimistic().await?;
-            txn.scan(range, u32::MAX).await?.collect()
+            let stream = txn.scan(range, u32::MAX).await?;
+            let kvs: Vec<KvPair> = stream.collect();
+            txn.rollback().await?;
+            (kvs, ())
         };
 
         let mut out = Vec::new();
