@@ -1,4 +1,4 @@
-name: Integration Test
+name: Integration Test with Redis Meta store/Index Store
 on:
   pull_request:
     branches:

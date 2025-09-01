@@ -1,16 +1,26 @@
 use crate::common::utils::jittered_delay;
 use crate::storage::{
-    file::file_meta_store::FileMetaStore,
-    file::file_log_store::FileLogStore,
     log_store_impl::LogStoreImpl,
     meta_store_impl::MetaStoreImpl,
-    s3::s3_meta_store::S3MetaStore,
-    s3::s3_log_store::S3LogStore,
-    s3::s3_client::S3Client,
-    redis::redis_meta_store::RedisMetaStore,
+    index_store_impl::IndexStoreImpl,
+    file::{
+        file_meta_store::FileMetaStore,
+        file_log_store::FileLogStore,
+    },
+    s3::{
+        s3_meta_store::S3MetaStore,
+        s3_log_store::S3LogStore,
+        s3_client::S3Client,
+    },
+    redis::{
+        redis_meta_store::RedisMetaStore,
+        redis_index_store::RedisIndexStore,
+    },
+    tikv::{
+        tikv_meta_store::TikvMetaStore,
+        tikv_index_store::TikvIndexStore,
+    },
 };
-use crate::storage::{index_store_impl::IndexStoreImpl};
-use crate::storage::redis::redis_index_store::RedisIndexStore;
 use crate::common::config::StorageType;
 use anyhow::Result;
 use fred::prelude::Pool;
@@ -97,6 +107,13 @@ pub async fn load_index_store(server_config: &ServerConfig) -> Result<IndexStore
             // redis_client.init().await.expect("Failed to connect to redis");
             IndexStoreImpl::Redis(RedisIndexStore::new(redis_client))
         },
+        StorageType::Tikv => {
+            log::debug!("Using TiKV index store");
+            let tikv_endpoints = server_config.index_store_tikv_endpoints.clone().ok_or_else(|| anyhow::anyhow!("TiKV endpoints not configured"))?;
+            let tikv_endpoint_vec = tikv_endpoints.split(',').map(|s| s.trim().to_string()).collect::<Vec<String>>();
+            let tikv_client = tikv_client::TransactionClient::new(tikv_endpoint_vec).await?;
+            IndexStoreImpl::Tikv(TikvIndexStore::new(tikv_client))
+        },
         _ => {
             return Err(anyhow::anyhow!("Unsupported index store backend"));
         }
@@ -144,9 +161,15 @@ pub async fn load_meta_store(server_config: &ServerConfig) -> Result<MetaStoreIm
                 .build_pool(pool_size)
                 .expect("Failed to create redis pool");
             init_with_retry(&redis_client, 0, 1000, 30_000, 3).await?;
-            // redis_client.init().await.expect("Failed to connect to redis");
             MetaStoreImpl::Redis(RedisMetaStore::new(redis_client))
-        }
+        },
+        StorageType::Tikv => {
+            log::debug!("Using TiKV meta store");
+            let tikv_endpoints = server_config.meta_store_tikv_endpoints.clone().ok_or_else(|| anyhow::anyhow!("TiKV endpoints not configured"))?;
+            let tikv_endpoint_vec = tikv_endpoints.split(',').map(|s| s.trim().to_string()).collect::<Vec<String>>();
+            let tikv_client = tikv_client::TransactionClient::new(tikv_endpoint_vec).await?;
+            MetaStoreImpl::Tikv(TikvMetaStore::new(tikv_client))
+        },
     };
     Ok(meta_store_load)
 }

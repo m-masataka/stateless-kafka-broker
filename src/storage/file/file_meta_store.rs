@@ -1,11 +1,7 @@
-use crate::common::consumer::{
-    ConsumerGroupPartition,
-    ConsumerGroupTopic,
-};
 use crate::traits::meta_store::UnsendMetaStore;
 use crate::common::{
     topic_partition::Topic,
-    consumer::{ConsumerGroup, ConsumerGroupMember},
+    consumer::ConsumerGroup,
 };
 use anyhow::Result;
 use std::io::{ 
@@ -39,7 +35,7 @@ impl FileMetaStore {
 }
 
 impl UnsendMetaStore for FileMetaStore {
-    async fn save_topic_partition(&self, data: &Topic) -> Result<()> {
+    async fn put_topic(&self, data: &Topic) -> Result<()> {
         let mut metadata_map: HashMap<String, Topic> = match File::open(&self.meta_store_path) {
             Ok(mut file) => {
                 let mut contents = String::new();
@@ -66,24 +62,19 @@ impl UnsendMetaStore for FileMetaStore {
         Ok(())
     }
 
-    async fn get_topic(&self, name: Option<&str>, topic_id: Option<&str>) -> Result<Option<Topic>> {
+    async fn get_topic(&self, topic_id: &str) -> Result<Topic> {
         let file = match File::open(&self.meta_store_path) {
             Ok(f) => f,
-            Err(e) if e.kind() == NotFound => return Ok(None),
             Err(e) => return Err(e.into()),
         };
         let reader = BufReader::new(file);
         let map: HashMap<String, Topic> = serde_json::from_reader(reader)?;
-    
-        let result = map.values().find(|topic| {
-            name.is_some_and(|n| topic.name.as_deref() == Some(n)) ||
-            topic_id.is_some_and(|id| topic.topic_id.to_string() == id)
-        });
-    
-        Ok(result.cloned())
+
+        let result = map.values().find(|topic| topic.topic_id.to_string() == topic_id);
+        Ok(result.cloned().ok_or_else(|| anyhow::anyhow!("Topic not found"))?)
     }
     
-    async fn get_all_topics(&self) -> Result<Vec<Topic>> {
+    async fn get_topics(&self) -> Result<Vec<Topic>> {
         let file = match File::open(&self.meta_store_path) {
             Ok(f) => f,
             Err(e) if e.kind() == NotFound => return Ok(vec![]),
@@ -113,32 +104,6 @@ impl UnsendMetaStore for FileMetaStore {
         }
     
         Ok(None)
-    }
-
-    async fn delete_topic_by_name(&self, name: &str) -> Result<()> {
-        let mut metadata_map: HashMap<String, Topic> = match File::open(&self.meta_store_path) {
-            Ok(mut file) => {
-                let mut contents = String::new();
-                file.read_to_string(&mut contents)?;
-                if contents.trim().is_empty() {
-                    HashMap::new()
-                } else {
-                    serde_json::from_str(&contents)?
-                }
-            },
-            Err(e) if e.kind() == NotFound => {
-                HashMap::new()
-            },
-            Err(e) => return Err(e.into()),
-        };
-    
-        metadata_map.retain(|_, topic| topic.name.as_deref() != Some(name));
-    
-        let mut file = File::create(&self.meta_store_path)?;
-        let json = serde_json::to_string_pretty(&metadata_map)?;
-        file.write_all(json.as_bytes())?;
-    
-        Ok(())
     }
 
     async fn delete_topic_by_id(&self, topic_id: uuid::Uuid) -> Result<()> {
@@ -233,11 +198,11 @@ impl UnsendMetaStore for FileMetaStore {
         }
     }
 
-    async fn update_heartbeat(&self, group_id: &str) -> Result<Option<ConsumerGroup>> {
+    async fn update_consumer_group<F,Fut>(&self,group_id: &str,update_fn:F,) -> Result<Option<ConsumerGroup> >where F:FnOnce(ConsumerGroup) -> Fut+Send+'static,Fut:std::future::Future<Output = Result<ConsumerGroup> > +Send+'static {
         let filename = format!("{group_id}.json");
         let path = &self.consumer_group_dir_path.join(filename);
 
-        log::debug!("Checking heartbeat for consumer group: {}", group_id);
+        log::debug!("Updating consumer group with closure: {}", group_id);
         let mut file = OpenOptions::new()
         .read(true)
         .write(true)
@@ -248,169 +213,7 @@ impl UnsendMetaStore for FileMetaStore {
         file.seek(SeekFrom::Start(0))?;
         let reader = BufReader::new(&mut file);
     
-        let checked_group: ConsumerGroup = match serde_json::from_reader::<_, ConsumerGroup>(reader) {
-            Ok(g) => {
-                 let mut g = g.clone();
-                g.members.retain(|member| {
-                    if let Ok(duration) = std::time::SystemTime::now().duration_since(member.last_heartbeat) {
-                        duration.as_secs() < 10 // TODO: Set heartbeat timeout duration
-                    } else {
-                        log::error!("Failed to calculate duration since last heartbeat for member {}", member.member_id);
-                        false
-                    }
-                });
-                g.is_rebalancing = match g.members.iter().find(|m| m.is_leader) {
-                    Some(_) => false,
-                    None => true,
-                };
-                g
-            },
-            Err(e) if e.is_eof() => {
-                log::warn!("File is empty: {:?}", path);
-                return Ok(None);
-            }
-            Err(e) => return Err(e.into()),
-        };
-
-        log::debug!("Saving updated consumer group data to file: {:?}", path);
-        let json = serde_json::to_string_pretty(&checked_group)?;
-        file.set_len(0)?;
-        file.seek(std::io::SeekFrom::Start(0))?; 
-        file.write_all(json.as_bytes())?;
-        Ok(Some(checked_group.clone()))
-    }
-
-    async fn offset_commit(&self, group_id: &str, topic_name: &str, partition_index: i32, offset: i64) -> Result<()> {
-        let filename = format!("{group_id}.json");
-        let path = &self.consumer_group_dir_path.join(filename);
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(&path)?;
-        
-        file.lock_exclusive()?;
-        file.seek(SeekFrom::Start(0))?;
-        let reader = BufReader::new(&mut file);
-        let mut consumer_group: ConsumerGroup = match serde_json::from_reader::<_, ConsumerGroup>(reader) {
-            Ok(g) => g,
-            Err(e) if e.is_eof() => {
-                log::warn!("File is empty: {:?}", path);
-                return Ok(());
-            }
-            Err(e) => return Err(e.into()),
-        };
-
-        if consumer_group.group_id != group_id {
-            log::error!("Consumer group ID mismatch: expected {}, found {}", group_id, consumer_group.group_id);
-            return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "Consumer group ID mismatch").into());
-        }
-        if consumer_group.is_rebalancing {
-            log::warn!("Consumer group {} is currently rebalancing, cannot commit offset", group_id);
-            return Err(std::io::Error::new(std::io::ErrorKind::Other, "Consumer group is rebalancing").into());
-        }
-
-        // update offset
-        log::debug!("Committing offset for group: {}, topic: {}, partition: {}, offset: {}", group_id, topic_name, partition_index, offset);
-        let topics = consumer_group.topics.get_or_insert_with(Vec::new);
-        let topic = topics.iter_mut().find(|t| t.name == topic_name);
-        let generation_id = consumer_group.generation_id;
-        match topic {
-            Some(topic) => {
-                match topic.partitions.iter_mut().find(|p| p.partition_index == partition_index) {
-                    Some(partition) => {
-                        partition.committed_offset = offset;
-                        partition.committed_leader_epoch = generation_id;
-                        log::debug!(
-                            "Updated committed_offset for partition {} of topic '{}': {}",
-                            partition_index, topic_name, offset
-                        );
-                    }
-                    None => {
-                        topic.partitions.push(ConsumerGroupPartition {
-                            partition_index: partition_index,
-                            committed_offset: offset,
-                            committed_leader_epoch: generation_id,
-                            metadata: None,
-                        });
-                        log::debug!(
-                            "Created new partition {} in topic '{}', committed_offset: {}",
-                            partition_index, topic_name, offset
-                        );
-                    }
-                }
-            }
-            None => {
-                topics.push(ConsumerGroupTopic {
-                    name: topic_name.to_string(),
-                    partitions: vec![ConsumerGroupPartition {
-                        partition_index: partition_index,
-                        committed_offset: offset,
-                        committed_leader_epoch: generation_id,
-                        metadata: None,
-                    }],
-                });
-                log::debug!(
-                    "Created new topic '{}' with partition {}, committed_offset: {}",
-                    topic_name, partition_index, offset
-                );
-            }
-        }
-
-
-        log::debug!("Saving updated consumer group data to file: {:?}", path);
-        let json = serde_json::to_string_pretty(&consumer_group)?;
-        file.set_len(0)?;
-        file.seek(std::io::SeekFrom::Start(0))?; 
-        file.write_all(json.as_bytes())?;
-        Ok(())
-    }
-
-    async fn leave_group(&self, group_id: &str, member_id: &str) -> Result<()> {
-        let filename = format!("{group_id}.json");
-        let path = &self.consumer_group_dir_path.join(filename);
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(&path)?;
-        
-        file.lock_exclusive()?;
-        file.seek(SeekFrom::Start(0))?;
-        let reader = BufReader::new(&mut file);
-        let mut consumer_group: ConsumerGroup = match serde_json::from_reader::<_, ConsumerGroup>(reader) {
-            Ok(g) => g,
-            Err(e) if e.is_eof() => {
-                log::warn!("File is empty: {:?}", path);
-                return Ok(());
-            }
-            Err(e) => return Err(e.into()),
-        };
-        
-        consumer_group.members.retain(|member| member.member_id != member_id);
-        
-        log::debug!("Saving updated consumer group data to file: {:?}", path);
-        let json = serde_json::to_string_pretty(&consumer_group)?;
-        file.set_len(0)?;
-        file.seek(std::io::SeekFrom::Start(0))?; 
-        file.write_all(json.as_bytes())?;
-        
-        Ok(())
-    }
-
-    async fn update_heartbeat_by_member_id(&self, group_id: &str, member_id: &str) -> Result<Option<ConsumerGroup>> {
-        let filename = format!("{group_id}.json");
-        let path = &self.consumer_group_dir_path.join(filename);
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(&path)?;
-        
-        file.lock_exclusive()?;
-        file.seek(SeekFrom::Start(0))?;
-        let reader = BufReader::new(&mut file);
-        let mut consumer_group: ConsumerGroup = match serde_json::from_reader::<_, ConsumerGroup>(reader) {
+        let consumer_group: ConsumerGroup = match serde_json::from_reader::<_, ConsumerGroup>(reader) {
             Ok(g) => g,
             Err(e) if e.is_eof() => {
                 log::warn!("File is empty: {:?}", path);
@@ -419,62 +222,14 @@ impl UnsendMetaStore for FileMetaStore {
             Err(e) => return Err(e.into()),
         };
 
-        if let Some(member) = consumer_group.members.iter_mut().find(|m| m.member_id == member_id) {
-            member.last_heartbeat = std::time::SystemTime::now();
-            log::debug!("Updated heartbeat for member: {}", member_id);
-        } else {
-            log::warn!("Member {} not found in group {}", member_id, group_id);
-        }
+        let updated_group = update_fn(consumer_group).await?;
 
         log::debug!("Saving updated consumer group data to file: {:?}", path);
-        let json = serde_json::to_string_pretty(&consumer_group)?;
+        let json = serde_json::to_string_pretty(&updated_group)?;
         file.set_len(0)?;
         file.seek(std::io::SeekFrom::Start(0))?; 
         file.write_all(json.as_bytes())?;
-        
-        Ok(Some(consumer_group))
-    }
-
-    async fn update_consumer_group_member(&self, group_id: &str, member: &ConsumerGroupMember) -> Result<()> {
-        let filename = format!("{group_id}.json");
-        let path = &self.consumer_group_dir_path.join(filename);
-        let mut file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .open(&path)?;
-        
-        file.lock_exclusive()?;
-        file.seek(SeekFrom::Start(0))?;
-        let reader = BufReader::new(&mut file);
-        let mut consumer_group: ConsumerGroup = match serde_json::from_reader::<_, ConsumerGroup>(reader) {
-            Ok(g) => g,
-            Err(e) if e.is_eof() => {
-                log::warn!("File is empty: {:?}", path);
-                return Ok(());
-            }
-            Err(e) => return Err(e.into()),
-        };
-
-        if let Some(existing_member) = consumer_group
-            .members.iter_mut().find(|m| m.member_id == member.member_id) {
-                existing_member.metadata = member.metadata.clone();
-                existing_member.last_heartbeat = std::time::SystemTime::now();
-                existing_member.is_leader = member.is_leader;
-                existing_member.assignment = member.assignment.clone();
-            log::debug!("Updated existing member: {}", member.member_id);
-        } else {
-            consumer_group.members.push(member.clone());
-            log::debug!("Added new member: {}", member.member_id);
-        }
-
-        log::debug!("Saving updated consumer group data to file: {:?}", path);
-        let json = serde_json::to_string_pretty(&consumer_group)?;
-        file.set_len(0)?;
-        file.seek(std::io::SeekFrom::Start(0))?; 
-        file.write_all(json.as_bytes())?;
-
-        Ok(()) 
+        Ok(Some(updated_group))
     }
 
     async fn gen_producer_id(&self) -> Result<i64> {
