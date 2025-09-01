@@ -1,4 +1,4 @@
-name: Integration Test
+name: Integration Test with TiKV Meta store/Index Store
 on:
   pull_request:
     branches:
@@ -123,9 +123,9 @@ jobs:
         KAFKA_LOG_STORE_S3_ACCESS_KEY: minioadmin
         KAFKA_LOG_STORE_S3_SECRET_KEY: minioadmin
         KAFKA_META_STORE_TYPE: tikv
-        KAFKA_META_STORE_TIKV_ENDPOINTS: 127.0.0.1:20160
+        KAFKA_META_STORE_TIKV_ENDPOINTS: 127.0.0.1:2379
         KAFKA_INDEX_STORE_TYPE: tikv
-        KAFKA_INDEX_STORE_TIKV_ENDPOINTS: 127.0.0.1:20160
+        KAFKA_INDEX_STORE_TIKV_ENDPOINTS: 127.0.0.1:2379
       run: |
         ./target/release/stateless_kafka_broker --config config/cluster.sample.json 2>&1 | tee rust-server.log &
       working-directory: ${{ github.workspace }}
