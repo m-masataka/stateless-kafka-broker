@@ -2,6 +2,7 @@ use crate::traits::meta_store::UnsendMetaStore;
 use crate::common::{
     topic_partition::Topic,
     consumer::ConsumerGroup,
+    cluster::Node,
 };
 use anyhow::Result;
 use std::io::{ 
@@ -261,5 +262,13 @@ impl UnsendMetaStore for FileMetaStore {
         let json = serde_json::to_string_pretty(&producer_id)?;
         file.write_all(json.as_bytes())?;
         Ok(producer_id.producer_id)
+    }
+
+    async fn update_cluster_status(&self, node_config: &Node) -> Result<()> {
+        Ok(())
+    }
+
+    async fn get_cluster_status(&self) -> Result<Vec<Node> > {
+        Ok(vec![])
     }
 }

@@ -18,7 +18,7 @@ pub async fn handle_find_coordinator_request(
     log::info!("Handling FindCoordinatorRequest API VERSION {}", header.request_api_version);
     log::info!("FindCoordinatorRequest: {:?}", request);
 
-    let cluster_config = handler_ctx.cluster_config.clone();
+    let node_config = handler_ctx.node_config.clone();
     let mut response = FindCoordinatorResponse::default();
 
     // API version 3 and above returns a list of coordinators
@@ -28,17 +28,17 @@ pub async fn handle_find_coordinator_request(
         for key in &request.coordinator_keys {
             let mut coordinator = Coordinator::default();
             coordinator.key = key.clone();
-            coordinator.node_id = BrokerId(cluster_config.node_id);
-            coordinator.host = cluster_config.advertised_host.clone().into();
-            coordinator.port = cluster_config.advertised_port;
+            coordinator.node_id = BrokerId(node_config.node_id);
+            coordinator.host = node_config.advertised_host.clone().into();
+            coordinator.port = node_config.advertised_port;
             coordinator.error_code = 0;
             coordinators.push(coordinator);
         }
         response.coordinators = coordinators;
     } else {
-        response.node_id = BrokerId(cluster_config.node_id);
-        response.host = cluster_config.advertised_host.clone().into();
-        response.port = cluster_config.advertised_port;
+        response.node_id = BrokerId(node_config.node_id);
+        response.host = node_config.advertised_host.clone().into();
+        response.port = node_config.advertised_port;
         response.error_code = 0;
     }
     send_kafka_response(header, &response).await

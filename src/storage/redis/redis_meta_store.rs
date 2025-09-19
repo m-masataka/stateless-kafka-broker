@@ -2,6 +2,7 @@ use crate::common::utils::jittered_delay;
 use crate::traits::meta_store::UnsendMetaStore;
 use crate::common::topic_partition::Topic;
 use crate::common::consumer::ConsumerGroup;
+use crate::common::cluster::Node;
 use std::time::Duration;
 use anyhow::Result;
 use tokio::time::sleep;
@@ -93,10 +94,10 @@ impl UnsendMetaStore for RedisMetaStore {
     async fn get_topics(&self) -> Result<Vec<Topic>> {
         let max_align_topics = 1000000; // Arbitrary large number to limit the scan
         
-        let keys: Vec<String> = self.scan_keys("topic:*", max_align_topics).await?;
+        let keys: Vec<Key> = self.scan_keys("topic:*", max_align_topics).await?;
         let mut topics = Vec::new();
         for key in keys {
-            let maybe_value: Option<String> = self.client.get(&key).await?;
+            let maybe_value: Option<String> = self.client.get(key).await?;
             let value = match maybe_value {
                 Some(v) => v,
                 None => return Ok(Vec::new()),
@@ -138,10 +139,10 @@ impl UnsendMetaStore for RedisMetaStore {
     async fn get_consumer_groups(&self) -> Result<Vec<ConsumerGroup> > {
         // Get all consumer groups from Redis
         let max_align_groups = 1000000; // Arbitrary large number to limit the scan
-        let keys: Vec<String> = self.scan_keys("consumer_group:*", max_align_groups).await?;
+        let keys: Vec<Key> = self.scan_keys("consumer_group:*", max_align_groups).await?;
         let mut consumer_groups = Vec::new();
         for key in keys {
-            let maybe_value: Option<String> = self.client.get(&key).await?;
+            let maybe_value: Option<String> = self.client.get(key).await?;
             let value = match maybe_value {
                 Some(v) => v,
                 None => continue, // Skip if no value found
@@ -213,10 +214,55 @@ impl UnsendMetaStore for RedisMetaStore {
             Ok(Some(cg))
         }).await
     }
+
+    async fn update_cluster_status(&self, node_config: &Node) -> Result<()> {
+        let key = format!("node_config:{}", node_config.node_id);
+        let key_self = key.clone();
+        let mut node_config = node_config.clone();
+        let now_ms: i64 = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| anyhow::anyhow!("clock error: {e:?}"))?
+            .as_millis() as i64;
+        node_config.heartbeat_time = Some(now_ms);
+        let value = serde_json::to_string(&node_config)?;
+
+        // Set with a TTL of 60 seconds to allow for some leeway
+        match self.client.set::<(), String, String>(key, value, Some(Expiration::PX(60_000)), None, false).await {
+          Ok(_val) => {},
+          Err(err) => {
+            log::error!("Failed to set node config in Redis: {}", err);
+            return Err(anyhow::anyhow!("Failed to set node config in Redis"));
+          }
+        }
+        log::debug!("Updated cluster status for node: {}", key_self);
+        Ok(())
+    }
+    
+    async fn get_cluster_status(&self) -> Result<Vec<Node>> {
+        let prefix = "node_config:";
+        let max_nodes = 1000;
+        let keys: Vec<Key> = self.scan_keys(&format!("{}*", prefix), max_nodes).await?;
+        let mut nodes = Vec::new();
+        for key in keys {
+            let key_clone = key.clone();
+            let maybe_value: Option<String> = self.client.get(key).await?;
+            let value = match maybe_value {
+                Some(v) => v,
+                None => {
+                    log::warn!("Node config not found for key: {:?}", key_clone);
+                    continue;
+                },
+            };
+            if let Ok(node) = serde_json::from_str::<Node>(&value) {
+                nodes.push(node);
+            }
+        }
+        Ok(nodes)
+    }
 }
 
 impl RedisMetaStore {
-    pub async fn scan_keys(&self, pattern: &str, max_keys: usize) -> Result<Vec<String>> {
+    pub async fn scan_keys(&self, pattern: &str, max_keys: usize) -> Result<Vec<Key>> {
         let mut cursor: Str = "0".to_string().into();
         // break out after max_counts records
         let mut count = 0;
@@ -225,7 +271,7 @@ impl RedisMetaStore {
             let (new_cursor, keys): (Str, Vec<Key>) = self.client.scan_page(cursor.clone(), pattern, Some(100), None).await?;
             count += keys.len();
             for key in keys.into_iter() {
-                all_keys.push(format!("{:?}", key));
+                all_keys.push(key);
             }
 
             if count >= max_keys || new_cursor == "0" {

@@ -5,6 +5,7 @@ use crate::storage::s3::s3_client::S3Client;
 use crate::traits::meta_store::UnsendMetaStore;
 use crate::common::topic_partition::Topic;
 use crate::common::consumer::ConsumerGroup;
+use crate::common::cluster::Node;
 
 pub struct S3MetaStore {
     s3_client: S3Client,
@@ -205,6 +206,13 @@ impl UnsendMetaStore for S3MetaStore {
         Ok(producer_id)
     }
 
+    async fn update_cluster_status(&self, node_config: &Node) -> Result<()> {
+        Ok(())
+    }
+
+    async fn get_cluster_status(&self) -> Result<Vec<Node>> {
+        Ok(vec![])
+    }
 }
 
 impl S3MetaStore {
@@ -256,5 +264,4 @@ impl S3MetaStore {
         log::debug!("Successfully released lock: {}", key);
         Ok(())
     }
-    
 }

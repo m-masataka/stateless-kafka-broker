@@ -6,6 +6,7 @@ use crate::storage::tikv::tikv_meta_store::TikvMetaStore;
 use crate::common::{
     topic_partition::Topic,
     consumer::ConsumerGroup,
+    cluster::Node,
 };
 use anyhow::Result;
 
@@ -108,6 +109,24 @@ impl MetaStore for MetaStoreImpl {
             MetaStoreImpl::S3(s) => s.update_consumer_group(group_id, update_fn).await,
             MetaStoreImpl::Redis(r) => r.update_consumer_group(group_id, update_fn).await,
             MetaStoreImpl::Tikv(t) => t.update_consumer_group(group_id, update_fn).await,
+        }
+    }
+
+    async fn update_cluster_status(&self, node_config: &Node) -> Result<()> {
+        match self {
+            MetaStoreImpl::File(f) => f.update_cluster_status(node_config).await,
+            MetaStoreImpl::S3(s) => s.update_cluster_status(node_config).await,
+            MetaStoreImpl::Redis(r) => r.update_cluster_status(node_config).await,
+            MetaStoreImpl::Tikv(t) => t.update_cluster_status(node_config).await,
+        }
+    }
+
+    async fn get_cluster_status(&self) -> Result<Vec<Node>> {
+        match self {
+            MetaStoreImpl::File(f) => f.get_cluster_status().await,
+            MetaStoreImpl::S3(s) => s.get_cluster_status().await,
+            MetaStoreImpl::Redis(r) => r.get_cluster_status().await,
+            MetaStoreImpl::Tikv(t) => t.get_cluster_status().await,
         }
     }
 }

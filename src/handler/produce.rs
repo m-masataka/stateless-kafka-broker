@@ -39,7 +39,7 @@ pub async fn handle_produce_request(
     let meta_store = handler_ctx.meta_store.clone();
     let index_store = handler_ctx.index_store.clone();
     let log_store = handler_ctx.log_store.clone();
-    let cluster_config = handler_ctx.cluster_config.clone();
+    let node_config = handler_ctx.node_config.clone();
     let mut response = ProduceResponse::default();
     response.throttle_time_ms = 0;
 
@@ -167,9 +167,9 @@ pub async fn handle_produce_request(
 
     // Set the node endpoint information
     let mut node_endpoint = NodeEndpoint::default();
-    node_endpoint.node_id = BrokerId(cluster_config.controller_id);
-    node_endpoint.host = StrBytes::from_string(cluster_config.host.clone());
-    node_endpoint.port = cluster_config.port;
+    node_endpoint.node_id = BrokerId(node_config.controller_id);
+    node_endpoint.host = StrBytes::from_string(node_config.host.clone());
+    node_endpoint.port = node_config.port;
     response.node_endpoints = vec![node_endpoint];
 
     log::debug!("Sent ProduceResponse");

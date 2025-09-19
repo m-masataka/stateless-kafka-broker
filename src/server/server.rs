@@ -18,15 +18,19 @@ use crate::handler::{
     leave_group::handle_leave_group_request,
     consumer_group_heartbeat::handle_consumer_group_heartbeat_request,
 };
-use crate::common::config::{load_cluster_config, load_server_config, ClusterConfig};
+use crate::common::config::{load_node_config, load_server_config};
+use crate::common::cluster::Node;
+use crate::common::utils::jittered_delay;
 use crate::storage::log_store_impl::LogStoreImpl;
 use crate::storage::meta_store_impl::MetaStoreImpl;
 use crate::storage::index_store_impl::IndexStoreImpl;
+use crate::server::cluster_heartbeat::send_heartbeat;
 use anyhow::{Ok, Result};
 use nix::sys::socket::{setsockopt, sockopt};
 use tokio::{
     net::TcpStream,
     io::AsyncReadExt,
+    time::{self, Duration},
 };
 use std::sync::Arc;
 
@@ -56,9 +60,8 @@ use tokio::io::AsyncWriteExt;
 pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
     env_logger::init();
     log::info!("Starting Kafka-compatible server...");
-    let cluster_conf_load = Arc::new(load_cluster_config(config_path)?);
+    let node_conf_load = Arc::new(load_node_config(config_path)?);
     let server_config_load = Arc::new(load_server_config()?);
-
 
     let listener = tokio::net::TcpListener::bind(format!("{}:{}", server_config_load.host, server_config_load.port)).await?;
     log::info!("Kafka-compatible server listening on port {}:{}", server_config_load.host, server_config_load.port);
@@ -67,11 +70,33 @@ pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
     let log_store = Arc::new(load_log_store(&server_config_load).await.unwrap());
     let index_store = Arc::new(load_index_store(&server_config_load).await.unwrap());
 
+    // Start cluster heartbeat task
+    log::info!("A: before spawning heartbeat");
+    {
+        let meta_store = meta_store.clone();
+        let node_config =  node_conf_load.clone();
+        tokio::spawn(async move {
+            // Update cluster status immediately on startup
+            if let Err(e) = send_heartbeat(&node_config, meta_store.clone()).await {
+                log::warn!("heartbeat failed: {:?}", e);
+            }
+            // Then start periodic updates
+            let jitter = jittered_delay(10); // 10 seconds base
+            let mut ticker = time::interval(Duration::from_secs(jitter));
+            loop {
+                ticker.tick().await;
+                if let Err(e) = send_heartbeat(&node_config, meta_store.clone()).await {
+                    log::warn!("heartbeat failed: {:?}", e);
+                }
+            }
+        });
+    }
+    log::info!("B: after spawning heartbeat, entering accept loop");
     
     loop {
         let (stream, addr) = listener.accept().await?;
 
-        let std_stream = stream.into_std()?;  // Tokio → std
+        let std_stream = stream.into_std()?;
         // Set socket options
         if let Some(send_buf) = server_config_load.tcp_send_buffer_bytes {
             setsockopt(&std_stream, sockopt::SndBuf, &send_buf)
@@ -92,12 +117,11 @@ pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
         // Convert std::net::TcpStream back to tokio::net::TcpStream
         let stream = TcpStream::from_std(std_stream)?;
 
-
         if let Err(e) = stream.set_nodelay(true) {
             log::warn!("Failed to set TCP_NODELAY: {:?}", e);
         }
         log::info!("Accepted connection from {:?}", addr);
-        let cluster_config = cluster_conf_load.clone();
+        let node_config = node_conf_load.clone();
         let meta_store = meta_store.clone();
         let log_store = log_store.clone();
         let index_store = index_store.clone();
@@ -106,7 +130,7 @@ pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
         tokio::spawn(async move {
             if let Err(e) = handle_connection(
                 stream,
-                cluster_config,
+                node_config,
                 meta_store,
                 log_store,
                 index_store,
@@ -118,7 +142,7 @@ pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
 }
 
 async fn handle_connection(stream: tokio::net::TcpStream, 
-    cluster_config: Arc<ClusterConfig>,
+    node_config: Arc<Node>,
     meta_store: Arc<MetaStoreImpl>,
     log_store: Arc<LogStoreImpl>,
     index_store: Arc<IndexStoreImpl>,
@@ -159,7 +183,7 @@ async fn handle_connection(stream: tokio::net::TcpStream,
             log_store: log_store.clone(),
             meta_store: meta_store.clone(),
             index_store: index_store.clone(),
-            cluster_config: cluster_config.clone(),
+            node_config: node_config.clone(),
         };
 
         let response = match api_key {

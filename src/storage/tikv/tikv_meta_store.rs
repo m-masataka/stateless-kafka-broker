@@ -1,10 +1,11 @@
 use anyhow::{anyhow, Result};
-use std::ops::Bound;
+use std::{ops::Bound, time::{SystemTime, UNIX_EPOCH}};
 use tikv_client::{Key, KvPair, TransactionClient, Error as TikvError};
 
 use crate::traits::meta_store::UnsendMetaStore;
 use crate::common::topic_partition::Topic;
 use crate::common::consumer::ConsumerGroup;
+use crate::common::cluster::Node;
 use std::{future::Future, pin::Pin};
 
 // ========== Keyspace ==========
@@ -91,7 +92,7 @@ impl TikvMetaStore {
                 .collect();
 
             if batch.is_empty() { break; }
-            // 次回は最後のキーの「直後」から
+            // next start_bound
             let last_key = batch.last().unwrap().0.clone();
             start_bound = Bound::Excluded(last_key);
 
@@ -264,5 +265,66 @@ impl UnsendMetaStore for TikvMetaStore {
                 Ok(Some(cg))
             })
         }).await
+    }
+
+    // Update this node's status and remove stale nodes (heartbeat_time older than 60 seconds)
+    async fn update_cluster_status(&self, node_config: &Node) -> Result<()> {
+
+        // set heartbeat_time to current time
+        let now_ms: i64 = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_err(|e| anyhow::anyhow!("clock error: {e:?}"))?
+            .as_millis() as i64;
+        
+        let mut node_config = node_config.clone();
+        node_config.heartbeat_time = Some(now_ms);
+
+        let key = format!("{NS}node_config:{}", node_config.node_id);
+        let val = serde_json::to_vec(&node_config)?;
+
+        // check for stale nodes
+        let prefix = format!("{NS}node_config:");
+        let kvs = self.scan_prefix(&prefix, 10_000).await?;
+        let stale_keys: Vec<_> = kvs
+            .into_iter()
+            .filter_map(|kv| {
+                let k_bytes: &[u8] = (&kv.0).into();
+                let k = String::from_utf8_lossy(k_bytes).to_string();
+                if k == key { return None; } // skip self
+                let v = kv.value();
+                let n: Node = match serde_json::from_slice(&v) {
+                    Ok(n) => n,
+                    Err(_) => return Some(k), // if deserialization fails, consider it stale
+                };
+                let age_ms = now_ms.saturating_sub(n.heartbeat_time.unwrap_or(0));
+                if age_ms >= 60_000 { Some(k) } else { None }
+            })
+            .collect();
+
+        // update self and delete stale nodes in one transaction
+        self.with_txn_retry(|txn| {
+            let key = key.clone();
+            let val = val.clone();
+            let stale = stale_keys.clone();
+            Box::pin(async move {
+                txn.put(key, val).await?;
+                for k in stale {
+                    txn.delete(k).await?;
+                }
+                Ok(())
+            })
+        }).await
+    }
+
+    async fn get_cluster_status(&self) -> Result<Vec<Node>> {
+        let prefix = format!("{NS}node_config:");
+        let kvs = self.scan_prefix(&prefix, 10_000).await?;
+        let mut out = Vec::new();
+        for kv in kvs {
+            if let Ok(n) = serde_json::from_slice::<Node>(&kv.1) {
+                out.push(n);
+            }
+        }
+        Ok(out)
     }
 }
