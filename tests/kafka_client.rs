@@ -4,10 +4,10 @@ use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
 use rdkafka::message::Message;
 use rdkafka::producer::{FutureProducer, FutureRecord};
-use tokio_stream::StreamExt;
-use std::time::Duration;
-use uuid::Uuid;
 use std::collections::HashSet;
+use std::time::Duration;
+use tokio_stream::StreamExt;
+use uuid::Uuid;
 
 #[tokio::test]
 async fn test_consumer_group_join_and_fetch() {
@@ -37,18 +37,16 @@ async fn test_consumer_group_join_and_fetch() {
 
     for i in 1..=message_num {
         let payload = format!("test-message{}", i);
-        let key = format!("test-key{}", i); 
-    
+        let key = format!("test-key{}", i);
+
         producer
             .send(
-                FutureRecord::to(&topic_name)
-                    .payload(&payload)
-                    .key(&key),
+                FutureRecord::to(&topic_name).payload(&payload).key(&key),
                 Duration::from_secs(60),
             )
             .await
             .unwrap_or_else(|(e, _)| panic!("Failed to send message {}: {:?}", i, e));
-        
+
         println!("📤 Produced message {} to '{}'", i, topic_name);
     }
 
@@ -96,7 +94,6 @@ async fn test_consumer_group_join_and_fetch() {
             }
             Some(Err(e)) => {
                 eprintln!("⚠️ Kafka consume error: {:?}", e);
-
             }
             None => {
                 break; // Stream ended
@@ -111,6 +108,4 @@ async fn test_consumer_group_join_and_fetch() {
     );
 
     println!("✅ All expected messages received!");
-
 }
-
