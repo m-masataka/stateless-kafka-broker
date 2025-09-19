@@ -1,18 +1,16 @@
-use tokio::{join, task};
-use std::sync::{Arc, Mutex};
-use std::thread::sleep;
 use rdkafka::admin::{AdminClient, AdminOptions, NewTopic, TopicReplication};
 use rdkafka::config::ClientConfig;
 use rdkafka::consumer::{CommitMode, Consumer, StreamConsumer};
 use rdkafka::message::Message;
 use rdkafka::producer::{FutureProducer, FutureRecord};
-use tokio_stream::StreamExt;
-use std::time::Duration;
-use uuid::Uuid;
 use std::collections::HashSet;
+use std::sync::{Arc, Mutex};
+use std::thread::sleep;
+use std::time::Duration;
 use tokio::time::{self, Instant};
-
-
+use tokio::{join, task};
+use tokio_stream::StreamExt;
+use uuid::Uuid;
 
 #[tokio::test]
 async fn test_offset_commit_with_two_consumers() {
@@ -40,7 +38,9 @@ async fn test_offset_commit_with_two_consumers() {
         let payload = format!("test-message{}", i);
         producer
             .send(
-                FutureRecord::to(&topic_name).payload(&payload).key(&format!("k{}", i)),
+                FutureRecord::to(&topic_name)
+                    .payload(&payload)
+                    .key(&format!("k{}", i)),
                 Duration::from_secs(5),
             )
             .await
@@ -64,17 +64,20 @@ async fn test_offset_commit_with_two_consumers() {
             .unwrap()
     };
 
-    let consumer_task = |topic: String, group: String, out: Arc<Mutex<HashSet<String>>>, expected_count: usize| async move {
+    let consumer_task = |topic: String,
+                         group: String,
+                         out: Arc<Mutex<HashSet<String>>>,
+                         expected_count: usize| async move {
         let consumer = make_consumer(&group);
         consumer.subscribe(&[&topic]).unwrap();
         let mut stream = consumer.stream();
-    
+
         let idle_timeout = Duration::from_secs(5); // メッセージが5秒間来なければ終了
         let mut last_msg_time = Instant::now();
         loop {
             // stream.next().await にタイムアウトをかける
             let result = time::timeout(Duration::from_secs(1), stream.next()).await;
-    
+
             match result {
                 Ok(Some(Ok(msg))) => {
                     if let Some(Ok(payload)) = msg.payload_view::<str>() {
@@ -96,7 +99,7 @@ async fn test_offset_commit_with_two_consumers() {
                     break;
                 }
                 Err(_) => {
-                    // timeout: no message received 
+                    // timeout: no message received
                     println!("⏳ No message in 1s, checking if done...");
                     let guard = out.lock().unwrap();
                     if guard.len() >= expected_count {
@@ -105,7 +108,10 @@ async fn test_offset_commit_with_two_consumers() {
                 }
             }
             if last_msg_time.elapsed() >= idle_timeout {
-                println!("⌛ [{}] No messages for {:?}. Exiting loop.", group, idle_timeout);
+                println!(
+                    "⌛ [{}] No messages for {:?}. Exiting loop.",
+                    group, idle_timeout
+                );
                 break;
             }
         }
@@ -113,12 +119,22 @@ async fn test_offset_commit_with_two_consumers() {
 
     // Start two consumers in the same group
     let (r1, r2) = join!(
-        task::spawn(consumer_task(topic_name.clone(), group_id.clone(), c1_msgs_cloned, message_num)),
-        task::spawn(consumer_task(topic_name.clone(), group_id.clone(), c2_msgs_cloned, message_num))
+        task::spawn(consumer_task(
+            topic_name.clone(),
+            group_id.clone(),
+            c1_msgs_cloned,
+            message_num
+        )),
+        task::spawn(consumer_task(
+            topic_name.clone(),
+            group_id.clone(),
+            c2_msgs_cloned,
+            message_num
+        ))
     );
-    
+
     r1.unwrap();
-    sleep(Duration::from_secs(10));// Give some time for the second consumer to start
+    sleep(Duration::from_secs(10)); // Give some time for the second consumer to start
     r2.unwrap();
 
     let m1 = c1_msgs.lock().unwrap();

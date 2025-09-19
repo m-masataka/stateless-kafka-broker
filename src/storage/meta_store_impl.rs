@@ -1,12 +1,9 @@
-use crate::storage::redis::redis_meta_store::RedisMetaStore;
-use crate::traits::meta_store::{UnsendMetaStore, MetaStore};
+use crate::common::{cluster::Node, consumer::ConsumerGroup, topic_partition::Topic};
 use crate::storage::file::file_meta_store::FileMetaStore;
+use crate::storage::redis::redis_meta_store::RedisMetaStore;
 use crate::storage::s3::s3_meta_store::S3MetaStore;
 use crate::storage::tikv::tikv_meta_store::TikvMetaStore;
-use crate::common::{
-    topic_partition::Topic,
-    consumer::ConsumerGroup,
-};
+use crate::traits::meta_store::{MetaStore, UnsendMetaStore};
 use anyhow::Result;
 
 pub enum MetaStoreImpl {
@@ -98,7 +95,11 @@ impl MetaStore for MetaStoreImpl {
         }
     }
 
-    async fn update_consumer_group<F, Fut>(&self, group_id: &str, update_fn: F) -> Result<Option<ConsumerGroup>>
+    async fn update_consumer_group<F, Fut>(
+        &self,
+        group_id: &str,
+        update_fn: F,
+    ) -> Result<Option<ConsumerGroup>>
     where
         F: FnOnce(ConsumerGroup) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = Result<ConsumerGroup>> + Send + 'static,
@@ -108,6 +109,24 @@ impl MetaStore for MetaStoreImpl {
             MetaStoreImpl::S3(s) => s.update_consumer_group(group_id, update_fn).await,
             MetaStoreImpl::Redis(r) => r.update_consumer_group(group_id, update_fn).await,
             MetaStoreImpl::Tikv(t) => t.update_consumer_group(group_id, update_fn).await,
+        }
+    }
+
+    async fn update_cluster_status(&self, node_config: &Node) -> Result<()> {
+        match self {
+            MetaStoreImpl::File(f) => f.update_cluster_status(node_config).await,
+            MetaStoreImpl::S3(s) => s.update_cluster_status(node_config).await,
+            MetaStoreImpl::Redis(r) => r.update_cluster_status(node_config).await,
+            MetaStoreImpl::Tikv(t) => t.update_cluster_status(node_config).await,
+        }
+    }
+
+    async fn get_cluster_status(&self) -> Result<Vec<Node>> {
+        match self {
+            MetaStoreImpl::File(f) => f.get_cluster_status().await,
+            MetaStoreImpl::S3(s) => s.get_cluster_status().await,
+            MetaStoreImpl::Redis(r) => r.get_cluster_status().await,
+            MetaStoreImpl::Tikv(t) => t.get_cluster_status().await,
         }
     }
 }

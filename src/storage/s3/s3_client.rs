@@ -1,9 +1,13 @@
 use std::time::Duration;
 
-use aws_config::{timeout::TimeoutConfig, Region};
-use aws_sdk_s3::{config::{Credentials, SharedCredentialsProvider}, primitives::ByteStream, Client};
-use bytes::Bytes;
 use anyhow::Result;
+use aws_config::{Region, timeout::TimeoutConfig};
+use aws_sdk_s3::{
+    Client,
+    config::{Credentials, SharedCredentialsProvider},
+    primitives::ByteStream,
+};
+use bytes::Bytes;
 
 #[derive(Clone)]
 pub struct S3Client {
@@ -11,16 +15,31 @@ pub struct S3Client {
 }
 
 impl S3Client {
-    pub async fn new(endpoint: &str, access_key: &str, secret_key: &str, region: &str) -> Result<Self> {
-        log::debug!("Creating S3 client with endpoint: {}, region: {}", endpoint, region);
-        let credentials = Credentials::new(access_key.to_string(), secret_key.to_string(), None, None, "custom");
+    pub async fn new(
+        endpoint: &str,
+        access_key: &str,
+        secret_key: &str,
+        region: &str,
+    ) -> Result<Self> {
+        log::debug!(
+            "Creating S3 client with endpoint: {}, region: {}",
+            endpoint,
+            region
+        );
+        let credentials = Credentials::new(
+            access_key.to_string(),
+            secret_key.to_string(),
+            None,
+            None,
+            "custom",
+        );
         let config = aws_sdk_s3::config::Builder::new()
             .behavior_version_latest()
             .timeout_config(
                 TimeoutConfig::builder()
                     .operation_timeout(Duration::from_secs(20))
                     .operation_attempt_timeout(Duration::from_millis(1500))
-                    .build()
+                    .build(),
             )
             .region(Region::new(region.to_string()))
             .credentials_provider(SharedCredentialsProvider::new(credentials))
@@ -32,14 +51,16 @@ impl S3Client {
     }
 
     pub async fn get_object(&self, bucket: &str, key: &str) -> Result<(Bytes, String)> {
-        let output = self.client
+        let output = self
+            .client
             .get_object()
             .bucket(bucket)
             .key(key)
             .send()
             .await?;
 
-        let etag = output.e_tag()
+        let etag = output
+            .e_tag()
             .ok_or_else(|| anyhow::anyhow!("ETag not found in response"))?
             .to_string();
         let data = output.body.collect().await?.into_bytes();
@@ -69,13 +90,21 @@ impl S3Client {
             if response.is_truncated() == Some(false) || response.is_truncated().is_none() {
                 break;
             }
-            continuation_token = response.next_continuation_token().map(|token| token.to_owned());
+            continuation_token = response
+                .next_continuation_token()
+                .map(|token| token.to_owned());
         }
 
         Ok(objects)
     }
 
-    pub async fn put_object(&self, bucket: &str, key: &str, body: &Vec<u8>, etag: Option<String>) -> Result<()> {
+    pub async fn put_object(
+        &self,
+        bucket: &str,
+        key: &str,
+        body: &Vec<u8>,
+        etag: Option<String>,
+    ) -> Result<()> {
         let response = match etag {
             Some(etag) => {
                 log::debug!("Putting object to S3 with ETag: {}", etag);
@@ -133,7 +162,8 @@ impl S3Client {
 
     pub async fn acquire_lock(&self, bucket: &str, key: &str) -> Result<()> {
         log::debug!("Acquiring lock for key: {}", key);
-        let response = self.client
+        let response = self
+            .client
             .put_object()
             .bucket(bucket)
             .key(key)

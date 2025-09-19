@@ -1,5 +1,5 @@
-use serde::Serialize;
 use serde::Deserialize;
+use serde::Serialize;
 
 #[derive(Serialize, Deserialize)]
 pub struct IndexData {
@@ -14,10 +14,7 @@ pub fn index_data(data_path: &str, file_size: u64) -> IndexData {
     }
 }
 
-pub fn get_keys_before_threshold(
-    index_data: Vec<IndexData>,
-    threshold: u64,
-) -> Vec<String> {
+pub fn get_keys_before_threshold(index_data: Vec<IndexData>, threshold: u64) -> Vec<String> {
     let mut total_size = 0;
     let mut result = Vec::new();
 
@@ -31,4 +28,3 @@ pub fn get_keys_before_threshold(
 
     result
 }
-

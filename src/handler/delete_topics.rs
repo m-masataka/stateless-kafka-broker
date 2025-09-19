@@ -1,27 +1,25 @@
 use anyhow::Result;
-use kafka_protocol::messages::{RequestHeader, TopicName};
-use kafka_protocol::messages::delete_topics_response::{
-    DeleteTopicsResponse,
-    DeletableTopicResult,
-};
-use kafka_protocol::messages::delete_topics_request::{
-    DeleteTopicsRequest,
-    DeleteTopicState,
-};
 use kafka_protocol::error::ResponseError::UnknownTopicOrPartition;
+use kafka_protocol::messages::delete_topics_request::{DeleteTopicState, DeleteTopicsRequest};
+use kafka_protocol::messages::delete_topics_response::{
+    DeletableTopicResult, DeleteTopicsResponse,
+};
+use kafka_protocol::messages::{RequestHeader, TopicName};
 
-use crate::storage::meta_store_impl::MetaStoreImpl;
-use crate::{common::{response::send_kafka_response}};
-use crate::traits::meta_store::MetaStore;
+use crate::common::response::send_kafka_response;
 use crate::handler::context::HandlerContext;
+use crate::storage::meta_store_impl::MetaStoreImpl;
+use crate::traits::meta_store::MetaStore;
 
 pub async fn handle_delete_topics_request(
     header: &RequestHeader,
     request: &DeleteTopicsRequest,
     handler_ctx: &HandlerContext,
-) -> Result<Vec<u8>>
-{
-    log::info!("Handling DeleteTopicsRequest API VERSION {}", header.request_api_version);
+) -> Result<Vec<u8>> {
+    log::info!(
+        "Handling DeleteTopicsRequest API VERSION {}",
+        header.request_api_version
+    );
     log::debug!("DeleteTopicsRequest: {:?}", request);
 
     let meta_store = handler_ctx.meta_store.clone();
@@ -44,7 +42,10 @@ pub async fn handle_delete_topics_request(
     send_kafka_response(header, &response).await
 }
 
-async fn delete_topic(topic: &DeleteTopicState, meta_store: &MetaStoreImpl) -> DeletableTopicResult {
+async fn delete_topic(
+    topic: &DeleteTopicState,
+    meta_store: &MetaStoreImpl,
+) -> DeletableTopicResult {
     if let Some(name) = &topic.name {
         log::debug!("Deleting topic by name: {}", name.as_str());
         delete_topic_by_name(name.as_str(), meta_store).await
@@ -59,7 +60,7 @@ async fn delete_topic(topic: &DeleteTopicState, meta_store: &MetaStoreImpl) -> D
                 result.error_code = 0; // 0 means no error
                 result.topic_id = uuid::Uuid::new_v4(); // topic_id is not used in this version
                 result
-            },
+            }
             Err(e) => {
                 log::error!("Failed to delete topic {}: {:?}", topic.topic_id, e);
                 let mut result = DeletableTopicResult::default();
@@ -67,15 +68,12 @@ async fn delete_topic(topic: &DeleteTopicState, meta_store: &MetaStoreImpl) -> D
                 result.topic_id = topic.topic_id;
                 result.error_code = UnknownTopicOrPartition.code();
                 result
-            },
+            }
         }
-    } 
+    }
 }
 
-async fn delete_topic_by_name(
-    name: &str,
-    meta_store: &MetaStoreImpl,
-) -> DeletableTopicResult {
+async fn delete_topic_by_name(name: &str, meta_store: &MetaStoreImpl) -> DeletableTopicResult {
     log::debug!("Deleting topic by name: {}", name);
     let topic_id = match meta_store.get_topic_id_by_topic_name(name).await {
         Ok(Some(id_str)) => match uuid::Uuid::parse_str(&id_str) {
@@ -100,7 +98,7 @@ async fn delete_topic_by_name(
             let mut result = DeletableTopicResult::default();
             result.name = Some(TopicName(name.to_string().into()));
             result.error_code = UnknownTopicOrPartition.code();
-            return result
+            return result;
         }
     };
     match meta_store.delete_topic_by_id(topic_id).await {
@@ -112,13 +110,13 @@ async fn delete_topic_by_name(
             result.error_code = 0; // 0 means no error
             result.topic_id = uuid::Uuid::new_v4(); // topic_id is not used in this version
             result
-        },
+        }
         Err(e) => {
             log::error!("Failed to delete topic {}: {:?}", topic_id, e);
             let mut result = DeletableTopicResult::default();
             result.name = Some(TopicName(name.to_string().into()));
             result.error_code = UnknownTopicOrPartition.code();
             result
-        },
+        }
     }
 }

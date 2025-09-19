@@ -1,14 +1,9 @@
-use axum::{
-    extract::State,
-    Json,
-};
+use crate::server::rest_server::AppState;
 use crate::traits::meta_store::MetaStore;
-use crate::{server::rest_server::AppState};
-use crate::server::loader::load_meta_store;
+use axum::{Json, extract::State};
 
-pub async fn get_topics(State(st): State<AppState>) -> Json<serde_json::Value>{
-    let meta_store = load_meta_store(&st.config).await.unwrap();
-    let topics = meta_store.get_topics().await.unwrap_or_default();
+pub async fn get_topics(State(st): State<AppState>) -> Json<serde_json::Value> {
+    let topics = &st.meta_store.get_topics().await.unwrap_or_default();
     Json(serde_json::json!({
         "topics": topics.iter().map(|topic| {
             serde_json::json!({

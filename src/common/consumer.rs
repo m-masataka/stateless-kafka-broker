@@ -1,6 +1,6 @@
-use serde::{Serialize, Deserialize};
-use std::time::SystemTime;
 use bytes::Bytes;
+use serde::{Deserialize, Serialize};
+use std::time::SystemTime;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ConsumerGroupMember {
@@ -53,15 +53,23 @@ impl ConsumerGroup {
                 for topic in topics {
                     log::debug!("Topic: '{}'", topic.name);
                     for part in &topic.partitions {
-                        log::debug!("  Partition: {}, offset: {}", part.partition_index, part.committed_offset);
+                        log::debug!(
+                            "  Partition: {}, offset: {}",
+                            part.partition_index,
+                            part.committed_offset
+                        );
                     }
                 }
             }
             self.topics
-                .as_ref()? 
+                .as_ref()?
                 .iter()
                 .find(|t| t.name == topic_name)
-                .and_then(|t| t.partitions.iter().find(|p| p.partition_index == partition_index))
+                .and_then(|t| {
+                    t.partitions
+                        .iter()
+                        .find(|p| p.partition_index == partition_index)
+                })
         }
     }
 
@@ -72,19 +80,25 @@ impl ConsumerGroup {
     pub fn update_offset(&mut self, topic_name: &str, partition_index: i32, offset: i64) {
         log::debug!(
             "Updating offset for topic: {}, partition: {}, offset: {}",
-            topic_name, partition_index, offset
+            topic_name,
+            partition_index,
+            offset
         );
         log::debug!("Current group state: {:?}", self);
-    
+
         // Ensure `self.topics` is initialized
         let topics = self.topics.get_or_insert(Vec::new());
-    
+
         // Try to find the topic
         let topic_entry = topics.iter_mut().find(|t| t.name == topic_name);
-    
+
         if let Some(topic) = topic_entry {
             // Topic found, try to find partition
-            if let Some(partition) = topic.partitions.iter_mut().find(|p| p.partition_index == partition_index) {
+            if let Some(partition) = topic
+                .partitions
+                .iter_mut()
+                .find(|p| p.partition_index == partition_index)
+            {
                 partition.committed_offset = offset;
             } else {
                 // Partition not found, insert new
@@ -92,7 +106,7 @@ impl ConsumerGroup {
                     partition_index,
                     committed_offset: offset,
                     committed_leader_epoch: 0, // Default value, adjust as needed
-                    metadata: None, // Optional, adjust as needed
+                    metadata: None,            // Optional, adjust as needed
                 });
             }
         } else {
@@ -103,15 +117,18 @@ impl ConsumerGroup {
                     partition_index,
                     committed_offset: offset,
                     committed_leader_epoch: 0, // Default value, adjust as needed
-                    metadata: None, // Optional, adjust as needed
+                    metadata: None,            // Optional, adjust as needed
                 }],
-
             });
         }
     }
 
     pub fn upsert_member(&mut self, member: ConsumerGroupMember) {
-        if let Some(existing) = self.members.iter_mut().find(|m| m.member_id == member.member_id) {
+        if let Some(existing) = self
+            .members
+            .iter_mut()
+            .find(|m| m.member_id == member.member_id)
+        {
             *existing = member;
         } else {
             self.members.push(member);

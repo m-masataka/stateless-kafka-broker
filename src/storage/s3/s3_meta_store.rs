@@ -1,10 +1,11 @@
 use std::time::Duration;
 
+use crate::common::cluster::Node;
+use crate::common::consumer::ConsumerGroup;
+use crate::common::topic_partition::Topic;
 use crate::common::utils::jittered_delay;
 use crate::storage::s3::s3_client::S3Client;
 use crate::traits::meta_store::UnsendMetaStore;
-use crate::common::topic_partition::Topic;
-use crate::common::consumer::ConsumerGroup;
 
 pub struct S3MetaStore {
     s3_client: S3Client,
@@ -25,12 +26,14 @@ impl S3MetaStore {
 }
 
 impl UnsendMetaStore for S3MetaStore {
-    async fn put_topic(&self,data: &Topic) -> Result<()> {
+    async fn put_topic(&self, data: &Topic) -> Result<()> {
         let object_key = self.metadata_key(format!("topic-{}", data.topic_id));
         let value = serde_json::to_string(data)?;
         let value_bytes = value.as_bytes().to_vec();
         // pessmistic lock
-        self.s3_client.put_object(&self.bucket, &object_key, &value_bytes, None).await
+        self.s3_client
+            .put_object(&self.bucket, &object_key, &value_bytes, None)
+            .await
             .map_err(|e| {
                 log::error!("Failed to put object to S3: {:?}", e);
                 e
@@ -50,7 +53,9 @@ impl UnsendMetaStore for S3MetaStore {
 
     async fn delete_topic_by_id(&self, topic_id: uuid::Uuid) -> Result<()> {
         let object_key = self.metadata_key(format!("topic-{}", topic_id));
-        self.s3_client.delete_object(&self.bucket, &object_key).await
+        self.s3_client
+            .delete_object(&self.bucket, &object_key)
+            .await
             .map_err(|e| {
                 log::error!("Failed to delete topic from S3: {:?}", e);
                 e
@@ -60,11 +65,11 @@ impl UnsendMetaStore for S3MetaStore {
     }
 
     async fn get_topics(&self) -> Result<Vec<Topic>> {
-        let topic_list = self.s3_client.list_objects(
-            &self.bucket,
-            self.prefix.as_deref()
-        ).await?;
-        
+        let topic_list = self
+            .s3_client
+            .list_objects(&self.bucket, self.prefix.as_deref())
+            .await?;
+
         let mut topics = Vec::new();
         for object in topic_list {
             if object.starts_with("topic-") {
@@ -86,7 +91,10 @@ impl UnsendMetaStore for S3MetaStore {
         Ok(None)
     }
 
-    async fn save_consumer_group(&self, data: &crate::common::consumer::ConsumerGroup) -> Result<()> {
+    async fn save_consumer_group(
+        &self,
+        data: &crate::common::consumer::ConsumerGroup,
+    ) -> Result<()> {
         let object_key = self.metadata_key(format!("consumer-group-{}", data.group_id));
         let lock_key = self.metadata_key(format!("lock-consumer-group-{}", data.group_id));
         let value = serde_json::to_string(data)?;
@@ -94,7 +102,10 @@ impl UnsendMetaStore for S3MetaStore {
 
         // Acquire lock before writing
         self.acquire_lock(&self.bucket, &lock_key).await?;
-        let result = self.s3_client.put_object(&self.bucket, &object_key, &value_bytes, None).await;
+        let result = self
+            .s3_client
+            .put_object(&self.bucket, &object_key, &value_bytes, None)
+            .await;
         if let Err(e) = result {
             log::error!("Failed to put consumer group object to S3: {:?}", e);
             self.release_lock(&self.bucket, &lock_key).await?;
@@ -107,12 +118,12 @@ impl UnsendMetaStore for S3MetaStore {
         }
     }
 
-    async fn get_consumer_groups(&self) -> Result<Vec<ConsumerGroup> > {
-        let group_list = self.s3_client.list_objects(
-            &self.bucket,
-            self.prefix.as_deref()
-        ).await?;
-        
+    async fn get_consumer_groups(&self) -> Result<Vec<ConsumerGroup>> {
+        let group_list = self
+            .s3_client
+            .list_objects(&self.bucket, self.prefix.as_deref())
+            .await?;
+
         let mut groups = Vec::new();
         for object in group_list {
             if object.starts_with("consumer-group-") {
@@ -133,18 +144,32 @@ impl UnsendMetaStore for S3MetaStore {
         match self.s3_client.get_object(&self.bucket, &object_key).await {
             Ok((data, _)) => {
                 let group: ConsumerGroup = serde_json::from_slice(&data)?;
-                log::debug!("Successfully retrieved consumer group from S3: {}", object_key);
+                log::debug!(
+                    "Successfully retrieved consumer group from S3: {}",
+                    object_key
+                );
                 Ok(Some(group))
             }
             Err(e) => {
-                log::warn!("Failed to get consumer group from S3: {} - {:?}", group_id, e);
+                log::warn!(
+                    "Failed to get consumer group from S3: {} - {:?}",
+                    group_id,
+                    e
+                );
                 Ok(None)
             }
         }
     }
 
-    async fn update_consumer_group<F,Fut>(&self,group_id: &str,update_fn:F,) -> Result<Option<ConsumerGroup> >
-        where F:FnOnce(ConsumerGroup) -> Fut+Send+'static,Fut:std::future::Future<Output = Result<ConsumerGroup>> +Send+'static {
+    async fn update_consumer_group<F, Fut>(
+        &self,
+        group_id: &str,
+        update_fn: F,
+    ) -> Result<Option<ConsumerGroup>>
+    where
+        F: FnOnce(ConsumerGroup) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = Result<ConsumerGroup>> + Send + 'static,
+    {
         let object_key = self.metadata_key(format!("consumer-group-{}", group_id));
         let lock_key = self.metadata_key(format!("lock-consumer-group-{}", group_id));
         // Acquire lock before writing
@@ -156,12 +181,21 @@ impl UnsendMetaStore for S3MetaStore {
                 Ok(updated) => {
                     let value = serde_json::to_string(&updated)?;
                     let value_bytes = value.into_bytes(); // Vec<u8>
-                    self.s3_client.put_object(&self.bucket, &object_key, &value_bytes, None).await?;
-                    log::debug!("Successfully updated consumer group via closure: {}", group_id);
+                    self.s3_client
+                        .put_object(&self.bucket, &object_key, &value_bytes, None)
+                        .await?;
+                    log::debug!(
+                        "Successfully updated consumer group via closure: {}",
+                        group_id
+                    );
                     Some(updated)
-                },
+                }
                 Err(e) => {
-                    log::error!("Failed to apply update function for consumer group {}: {:?}", group_id, e);
+                    log::error!(
+                        "Failed to apply update function for consumer group {}: {:?}",
+                        group_id,
+                        e
+                    );
                     None
                 }
             }
@@ -179,7 +213,7 @@ impl UnsendMetaStore for S3MetaStore {
 
         // Acquire lock before writing
         self.acquire_lock(&self.bucket, &lock_key).await?;
-        
+
         let mut producer_id = 0;
         match self.s3_client.get_object(&self.bucket, &object_key).await {
             Ok((data, _)) => {
@@ -195,20 +229,29 @@ impl UnsendMetaStore for S3MetaStore {
         producer_id += 1;
         let value = producer_id.to_string();
         let value_bytes = value.into_bytes(); // Vec<u8>
-        
-        self.s3_client.put_object(&self.bucket, &object_key, &value_bytes, None).await?;
-        
+
+        self.s3_client
+            .put_object(&self.bucket, &object_key, &value_bytes, None)
+            .await?;
+
         log::debug!("Successfully generated new producer ID: {}", producer_id);
-        
+
         self.release_lock(&self.bucket, &lock_key).await?;
-        
+
         Ok(producer_id)
     }
 
+    async fn update_cluster_status(&self, node_config: &Node) -> Result<()> {
+        Ok(())
+    }
+
+    async fn get_cluster_status(&self) -> Result<Vec<Node>> {
+        Ok(vec![])
+    }
 }
 
 impl S3MetaStore {
-    fn metadata_key(&self, key :String) -> String {
+    fn metadata_key(&self, key: String) -> String {
         match &self.prefix {
             Some(prefix) => format!("{}/{}", prefix, key),
             None => format!("{}", key),
@@ -242,13 +285,18 @@ impl S3MetaStore {
         }
 
         if !acquired {
-            return Err(anyhow::anyhow!("Failed to acquire lock after retries: {}", lock_key));
+            return Err(anyhow::anyhow!(
+                "Failed to acquire lock after retries: {}",
+                lock_key
+            ));
         }
         return Ok(());
     }
 
     async fn release_lock(&self, bucket: &str, key: &str) -> Result<()> {
-        self.s3_client.release_lock(bucket, key).await
+        self.s3_client
+            .release_lock(bucket, key)
+            .await
             .map_err(|e| {
                 log::error!("Failed to release lock {}: {:?}", key, e);
                 e
@@ -256,5 +304,4 @@ impl S3MetaStore {
         log::debug!("Successfully released lock: {}", key);
         Ok(())
     }
-    
 }

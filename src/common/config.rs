@@ -1,30 +1,12 @@
-use serde::Deserialize;
+use crate::common::cluster::Node;
+use anyhow::Result;
 use config::{Config, Environment};
+use serde::Deserialize;
 use std::fs::File;
 use std::io::BufReader;
-use anyhow::Result;
 
 #[derive(Debug, Deserialize)]
-pub struct BrokerConfig {
-    pub node_id: i32,
-    pub host: String,
-    pub port: i32,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct ClusterConfig {
-    pub cluster_id: String,
-    pub controller_id: i32,
-    pub node_id: i32,
-    pub host: String,
-    pub port: i32,
-    pub advertised_host: String,
-    pub advertised_port: i32,
-    pub brokers: Vec<BrokerConfig>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "lowercase")]  // "s3", "file", "redis", "tikv"
+#[serde(rename_all = "lowercase")] // "s3", "file", "redis", "tikv"
 pub enum StorageType {
     File,
     S3,
@@ -68,20 +50,23 @@ pub struct ServerConfig {
 }
 
 pub fn load_server_config() -> Result<ServerConfig> {
-    dotenv::dotenv().ok(); // 開発用
+    dotenv::dotenv().ok(); // Load .env file if exists
     let cfg = Config::builder()
-        .add_source(Environment::default()
-            .prefix("KAFKA")
-            .try_parsing(true)
-        )
+        .add_source(Environment::default().prefix("KAFKA").try_parsing(true))
         .build()?;
     let config: ServerConfig = cfg.try_deserialize()?;
     Ok(config)
 }
 
-pub fn load_cluster_config(path: &str) -> Result<ClusterConfig> {
+pub fn load_node_config(path: &str) -> Result<Node> {
+    log::info!("Loading node config from: {}", path);
     let file = File::open(path)?;
     let reader = BufReader::new(file);
-    let config = serde_json::from_reader(reader)?;
-    Ok(config)
+    log::debug!("Reading node config file...");
+    let node = serde_json::from_reader(reader).map_err(|e| {
+        log::error!("Failed to parse node config JSON: {:?}", e);
+        e
+    })?;
+    log::debug!("Node config loaded successfully");
+    Ok(node)
 }

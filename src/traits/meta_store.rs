@@ -1,7 +1,4 @@
-use crate::common::{
-    topic_partition::Topic,
-    consumer::ConsumerGroup,
-};
+use crate::common::{cluster::Node, consumer::ConsumerGroup, topic_partition::Topic};
 use anyhow::Result;
 
 #[trait_variant::make(MetaStore: Send)]
@@ -14,12 +11,15 @@ pub trait UnsendMetaStore {
     async fn save_consumer_group(&self, data: &ConsumerGroup) -> Result<()>;
     async fn get_consumer_group(&self, group_id: &str) -> Result<Option<ConsumerGroup>>;
     async fn get_consumer_groups(&self) -> Result<Vec<ConsumerGroup>>;
-    async fn gen_producer_id(&self) -> Result<i64>;
     async fn update_consumer_group<F, Fut>(
         &self,
         group_id: &str,
         update_fn: F,
-    ) -> Result<Option<ConsumerGroup>>where
+    ) -> Result<Option<ConsumerGroup>>
+    where
         F: FnOnce(ConsumerGroup) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = Result<ConsumerGroup>> + Send + 'static;
+    async fn gen_producer_id(&self) -> Result<i64>;
+    async fn update_cluster_status(&self, node_config: &Node) -> Result<()>;
+    async fn get_cluster_status(&self) -> Result<Vec<Node>>;
 }
