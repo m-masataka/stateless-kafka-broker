@@ -41,8 +41,8 @@ pub async fn handle_metadata_request(
         .map(|b| {
             let mut broker = MetadataResponseBroker::default();
             broker.node_id = BrokerId(b.node_id);
-            broker.host = b.host.clone().into();
-            broker.port = b.port;
+            broker.host = b.advertised_host.clone().into();
+            broker.port = b.advertised_port as i32;
             broker
         })
         .collect::<Vec<_>>();
