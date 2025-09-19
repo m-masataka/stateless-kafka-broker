@@ -1,15 +1,12 @@
 use core::f64;
 
-use crate::traits::index_store::UnsendIndexStore;
 use crate::common::index::IndexData;
+use crate::traits::index_store::UnsendIndexStore;
 
 use fred::{
-    clients::Pool, prelude::{
-        KeysInterface, SortedSetsInterface
-    }, types::{
-        Expiration,
-        SetOptions,
-    }
+    clients::Pool,
+    prelude::{KeysInterface, SortedSetsInterface},
+    types::{Expiration, SetOptions},
 };
 
 pub struct RedisIndexStore {
@@ -18,35 +15,28 @@ pub struct RedisIndexStore {
 
 impl RedisIndexStore {
     pub fn new(client: Pool) -> Self {
-        Self {
-            client,
-        }
+        Self { client }
     }
 }
 
 impl UnsendIndexStore for RedisIndexStore {
-    async fn write_offset(
-        &self,
-        topic: &str,
-        partition: i32,
-        offset: i64,
-    ) -> anyhow::Result<()> {
+    async fn write_offset(&self, topic: &str, partition: i32, offset: i64) -> anyhow::Result<()> {
         let key = format!("offset:{}:{}", topic, partition);
-        match self.client.set::<(), String, i64>(key, offset, None, None, false).await {
-          Ok(_val) => {},
-          Err(err) => {
-            log::error!("Failed to set offset in Redis: {}", err);
-            return Err(anyhow::anyhow!("Failed to set offset in Redis"));
-          }
+        match self
+            .client
+            .set::<(), String, i64>(key, offset, None, None, false)
+            .await
+        {
+            Ok(_val) => {}
+            Err(err) => {
+                log::error!("Failed to set offset in Redis: {}", err);
+                return Err(anyhow::anyhow!("Failed to set offset in Redis"));
+            }
         }
         Ok(())
     }
 
-    async fn read_offset(
-        &self,
-        topic: &str,
-        partition: i32,
-    ) -> anyhow::Result<i64> {
+    async fn read_offset(&self, topic: &str, partition: i32) -> anyhow::Result<i64> {
         let key = format!("offset:{}:{}", topic, partition);
         let offset: Option<i64> = self.client.get(&key).await?;
         match offset {
@@ -65,8 +55,15 @@ impl UnsendIndexStore for RedisIndexStore {
         let key = format!("lock:{}:{}", topic, partition);
         let lock_id = uuid::Uuid::new_v4().to_string(); // unique token for reentrant safety if needed
         // let result = self.client.lock_exclusive(&key, &value, timeout_secs).await?;
-        let result: Option<String> = self.client
-            .set(key, &lock_id, Some(Expiration::EX(timeout_secs as i64)), Some(SetOptions::NX), false)
+        let result: Option<String> = self
+            .client
+            .set(
+                key,
+                &lock_id,
+                Some(Expiration::EX(timeout_secs as i64)),
+                Some(SetOptions::NX),
+                false,
+            )
             .await?;
         if result.is_some() {
             Ok(Some(lock_id)) // if lock acquired, return the lock id
@@ -83,17 +80,24 @@ impl UnsendIndexStore for RedisIndexStore {
     ) -> anyhow::Result<bool> {
         // TODO: Use Lua script for atomic unlock
         let key = format!("lock:{}:{}", topic, partition);
-        let deleted: i64 = self.client
-            .del(&key)
-            .await?;
+        let deleted: i64 = self.client.del(&key).await?;
         if deleted == 0 {
-            log::warn!("Failed to unlock exclusive lock for topic: {}, partition: {}, lock_id: {}", topic, partition, lock_id);
+            log::warn!(
+                "Failed to unlock exclusive lock for topic: {}, partition: {}, lock_id: {}",
+                topic,
+                partition,
+                lock_id
+            );
         } else {
-            log::debug!("Successfully unlocked exclusive lock for topic: {}, partition: {}, lock_id: {}", topic, partition, lock_id);
+            log::debug!(
+                "Successfully unlocked exclusive lock for topic: {}, partition: {}, lock_id: {}",
+                topic,
+                partition,
+                lock_id
+            );
         }
         Ok(deleted == 1)
     }
-
 
     async fn set_index(
         &self,
@@ -103,18 +107,28 @@ impl UnsendIndexStore for RedisIndexStore {
         data: &IndexData,
     ) -> anyhow::Result<()> {
         let key = format!("index:{}:{}", topic, partition);
-        log::debug!("Setting index for topic: {}, partition: {}, start_offset: {}", topic, partition, start_offset);
+        log::debug!(
+            "Setting index for topic: {}, partition: {}, start_offset: {}",
+            topic,
+            partition,
+            start_offset
+        );
         log::debug!("Key for index: {}", key);
         let data_string = serde_json::to_string(data).map_err(|e| {
             log::error!("Failed to serialize index data: {:?}", e);
             anyhow::anyhow!("Serialization error")
         })?;
-        let _: usize = self.client.zadd(&key, 
-            Some(SetOptions::NX), 
-            None,
-            true,
-            false,
-            (start_offset as f64, data_string)).await?;
+        let _: usize = self
+            .client
+            .zadd(
+                &key,
+                Some(SetOptions::NX),
+                None,
+                true,
+                false,
+                (start_offset as f64, data_string),
+            )
+            .await?;
         Ok(())
     }
 
@@ -125,7 +139,8 @@ impl UnsendIndexStore for RedisIndexStore {
         start_offset: i64,
     ) -> anyhow::Result<Vec<IndexData>> {
         let key = format!("index:{}:{}", topic, partition);
-        let results: Vec<String> = self.client
+        let results: Vec<String> = self
+            .client
             .zrangebyscore(&key, start_offset as f64, f64::INFINITY, false, None)
             .await?;
         let mut index_data = Vec::new();

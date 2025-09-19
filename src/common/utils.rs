@@ -1,4 +1,4 @@
-use rand::{rng, Rng};
+use rand::{Rng, rng};
 
 pub fn jittered_delay(base: u64) -> u64 {
     let mut rng = rng();

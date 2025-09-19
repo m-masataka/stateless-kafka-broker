@@ -1,58 +1,42 @@
 use crate::server::loader::{load_index_store, load_log_store, load_meta_store};
 
-use crate::handler::{
-    context::HandlerContext,
-    api_versions::handle_api_versions_request,
-    metadata::handle_metadata_request,
-    heartbeat::handle_heartbeat_request,
-    init_producer_id::handle_init_producer_id_request,
-    produce::handle_produce_request,
-    create_topics::handle_create_topics_request,
-    find_coordinator::handle_find_coordinator_request,
-    join_group::handle_join_group_request,
-    sync_group::handle_sync_group_request,
-    offset_fetch::handle_offset_fetch_request,
-    fetch::handle_fetch_request,
-    delete_topics::handle_delete_topics_request,
-    offset_commit::handle_offset_commit_request,
-    leave_group::handle_leave_group_request,
-    consumer_group_heartbeat::handle_consumer_group_heartbeat_request,
-};
-use crate::common::config::{load_node_config, load_server_config};
 use crate::common::cluster::Node;
+use crate::common::config::{load_node_config, load_server_config};
 use crate::common::utils::jittered_delay;
+use crate::handler::{
+    api_versions::handle_api_versions_request,
+    consumer_group_heartbeat::handle_consumer_group_heartbeat_request, context::HandlerContext,
+    create_topics::handle_create_topics_request, delete_topics::handle_delete_topics_request,
+    fetch::handle_fetch_request, find_coordinator::handle_find_coordinator_request,
+    heartbeat::handle_heartbeat_request, init_producer_id::handle_init_producer_id_request,
+    join_group::handle_join_group_request, leave_group::handle_leave_group_request,
+    metadata::handle_metadata_request, offset_commit::handle_offset_commit_request,
+    offset_fetch::handle_offset_fetch_request, produce::handle_produce_request,
+    sync_group::handle_sync_group_request,
+};
+use crate::server::cluster_heartbeat::send_heartbeat;
+use crate::storage::index_store_impl::IndexStoreImpl;
 use crate::storage::log_store_impl::LogStoreImpl;
 use crate::storage::meta_store_impl::MetaStoreImpl;
-use crate::storage::index_store_impl::IndexStoreImpl;
-use crate::server::cluster_heartbeat::send_heartbeat;
 use anyhow::{Ok, Result};
 use nix::sys::socket::{setsockopt, sockopt};
+use std::sync::Arc;
 use tokio::{
-    net::TcpStream,
     io::AsyncReadExt,
+    net::TcpStream,
     time::{self, Duration},
 };
-use std::sync::Arc;
 
 use kafka_protocol::messages::{
-    RequestKind,
-    RequestHeader,
-    ApiKey,
-    ApiVersionsRequest,
-    metadata_request::MetadataRequest,
-    heartbeat_request::HeartbeatRequest,
-    init_producer_id_request::InitProducerIdRequest,
-    produce_request::ProduceRequest,
-    create_topics_request::CreateTopicsRequest,
-    find_coordinator_request::FindCoordinatorRequest,
-    join_group_request::JoinGroupRequest,
-    sync_group_request::SyncGroupRequest,
-    offset_fetch_request::OffsetFetchRequest,
-    fetch_request::FetchRequest,
-    offset_commit_request::OffsetCommitRequest,
-    delete_topics_request::DeleteTopicsRequest,
-    leave_group_request::LeaveGroupRequest,
+    ApiKey, ApiVersionsRequest, RequestHeader, RequestKind,
     consumer_group_heartbeat_request::ConsumerGroupHeartbeatRequest,
+    create_topics_request::CreateTopicsRequest, delete_topics_request::DeleteTopicsRequest,
+    fetch_request::FetchRequest, find_coordinator_request::FindCoordinatorRequest,
+    heartbeat_request::HeartbeatRequest, init_producer_id_request::InitProducerIdRequest,
+    join_group_request::JoinGroupRequest, leave_group_request::LeaveGroupRequest,
+    metadata_request::MetadataRequest, offset_commit_request::OffsetCommitRequest,
+    offset_fetch_request::OffsetFetchRequest, produce_request::ProduceRequest,
+    sync_group_request::SyncGroupRequest,
 };
 use kafka_protocol::protocol::Decodable;
 use tokio::io::AsyncWriteExt;
@@ -63,8 +47,16 @@ pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
     let node_conf_load = Arc::new(load_node_config(config_path)?);
     let server_config_load = Arc::new(load_server_config()?);
 
-    let listener = tokio::net::TcpListener::bind(format!("{}:{}", server_config_load.host, server_config_load.port)).await?;
-    log::info!("Kafka-compatible server listening on port {}:{}", server_config_load.host, server_config_load.port);
+    let listener = tokio::net::TcpListener::bind(format!(
+        "{}:{}",
+        server_config_load.host, server_config_load.port
+    ))
+    .await?;
+    log::info!(
+        "Kafka-compatible server listening on port {}:{}",
+        server_config_load.host,
+        server_config_load.port
+    );
 
     let meta_store = Arc::new(load_meta_store(&server_config_load).await.unwrap());
     let log_store = Arc::new(load_log_store(&server_config_load).await.unwrap());
@@ -74,7 +66,7 @@ pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
     log::info!("A: before spawning heartbeat");
     {
         let meta_store = meta_store.clone();
-        let node_config =  node_conf_load.clone();
+        let node_config = node_conf_load.clone();
         tokio::spawn(async move {
             // Update cluster status immediately on startup
             if let Err(e) = send_heartbeat(&node_config, meta_store.clone()).await {
@@ -92,7 +84,7 @@ pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
         });
     }
     log::info!("B: after spawning heartbeat, entering accept loop");
-    
+
     loop {
         let (stream, addr) = listener.accept().await?;
 
@@ -128,20 +120,17 @@ pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
 
         // Spawn a new task for each connection
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(
-                stream,
-                node_config,
-                meta_store,
-                log_store,
-                index_store,
-            ).await {
+            if let Err(e) =
+                handle_connection(stream, node_config, meta_store, log_store, index_store).await
+            {
                 log::error!("Connection error: {:?}", e);
             }
         });
     }
 }
 
-async fn handle_connection(stream: tokio::net::TcpStream, 
+async fn handle_connection(
+    stream: tokio::net::TcpStream,
     node_config: Arc<Node>,
     meta_store: Arc<MetaStoreImpl>,
     log_store: Arc<LogStoreImpl>,
@@ -169,14 +158,19 @@ async fn handle_connection(stream: tokio::net::TcpStream,
         let mut peek = std::io::Cursor::new(&buffer);
         let api_key = AsyncReadExt::read_i16(&mut peek).await.unwrap();
         let api_version = AsyncReadExt::read_i16(&mut peek).await.unwrap();
-        let header_version = ApiKey::try_from(api_key).unwrap().request_header_version(api_version);
+        let header_version = ApiKey::try_from(api_key)
+            .unwrap()
+            .request_header_version(api_version);
 
         let mut buf = std::io::Cursor::new(&buffer);
         let header = RequestHeader::decode(&mut buf, header_version).unwrap();
         let api_key = ApiKey::try_from(header.request_api_key).unwrap();
         log::debug!(
             "api_key {:?}, api_version {}, header_version {}, correlation_id {:?}",
-            api_key, api_version, header_version, header.correlation_id
+            api_key,
+            api_version,
+            header_version,
+            header.correlation_id
         );
 
         let handler_ctx = HandlerContext {
@@ -189,9 +183,9 @@ async fn handle_connection(stream: tokio::net::TcpStream,
         let response = match api_key {
             ApiKey::ApiVersions => {
                 log::debug!("ApiVersion Request");
-                if let RequestKind::ApiVersions(ref req) =
-                    RequestKind::ApiVersions(ApiVersionsRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
+                if let RequestKind::ApiVersions(ref req) = RequestKind::ApiVersions(
+                    ApiVersionsRequest::decode(&mut buf, header.request_api_version).unwrap(),
+                ) {
                     handle_api_versions_request(&header, req, &handler_ctx).await
                 } else {
                     log::error!("Failed to decode ApiVersionsRequest");
@@ -200,9 +194,9 @@ async fn handle_connection(stream: tokio::net::TcpStream,
             }
             ApiKey::Metadata => {
                 log::debug!("Metadata Request");
-                if let RequestKind::Metadata(ref req) =
-                    RequestKind::Metadata(MetadataRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
+                if let RequestKind::Metadata(ref req) = RequestKind::Metadata(
+                    MetadataRequest::decode(&mut buf, header.request_api_version).unwrap(),
+                ) {
                     handle_metadata_request(&header, req, &handler_ctx).await
                 } else {
                     log::error!("Failed to decode MetadataRequest");
@@ -211,9 +205,9 @@ async fn handle_connection(stream: tokio::net::TcpStream,
             }
             ApiKey::DeleteTopics => {
                 log::debug!("DeleteTopics Request");
-                if let RequestKind::DeleteTopics(ref req) =
-                    RequestKind::DeleteTopics(DeleteTopicsRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
+                if let RequestKind::DeleteTopics(ref req) = RequestKind::DeleteTopics(
+                    DeleteTopicsRequest::decode(&mut buf, header.request_api_version).unwrap(),
+                ) {
                     handle_delete_topics_request(&header, req, &handler_ctx).await
                 } else {
                     log::error!("Failed to decode DeleteTopicsRequest");
@@ -222,9 +216,9 @@ async fn handle_connection(stream: tokio::net::TcpStream,
             }
             ApiKey::FindCoordinator => {
                 log::debug!("FindCoordinator Request");
-                if let RequestKind::FindCoordinator(ref req) =
-                    RequestKind::FindCoordinator(FindCoordinatorRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
+                if let RequestKind::FindCoordinator(ref req) = RequestKind::FindCoordinator(
+                    FindCoordinatorRequest::decode(&mut buf, header.request_api_version).unwrap(),
+                ) {
                     handle_find_coordinator_request(&header, req, &handler_ctx).await
                 } else {
                     log::error!("Failed to decode FindCoordinatorRequest");
@@ -233,9 +227,9 @@ async fn handle_connection(stream: tokio::net::TcpStream,
             }
             ApiKey::JoinGroup => {
                 log::debug!("JoinGroup Request");
-                if let RequestKind::JoinGroup(ref req) =
-                    RequestKind::JoinGroup(JoinGroupRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
+                if let RequestKind::JoinGroup(ref req) = RequestKind::JoinGroup(
+                    JoinGroupRequest::decode(&mut buf, header.request_api_version).unwrap(),
+                ) {
                     handle_join_group_request(&header, req, &handler_ctx).await
                 } else {
                     log::error!("Failed to decode JoinGroupRequest");
@@ -244,9 +238,9 @@ async fn handle_connection(stream: tokio::net::TcpStream,
             }
             ApiKey::LeaveGroup => {
                 log::debug!("LeaveGroup Request");
-                if let RequestKind::LeaveGroup(ref req) =
-                    RequestKind::LeaveGroup(LeaveGroupRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
+                if let RequestKind::LeaveGroup(ref req) = RequestKind::LeaveGroup(
+                    LeaveGroupRequest::decode(&mut buf, header.request_api_version).unwrap(),
+                ) {
                     handle_leave_group_request(&header, req, &handler_ctx).await
                 } else {
                     log::error!("Failed to decode LeaveGroupRequest");
@@ -255,9 +249,9 @@ async fn handle_connection(stream: tokio::net::TcpStream,
             }
             ApiKey::SyncGroup => {
                 log::debug!("SyncGroup Request");
-                if let RequestKind::SyncGroup(ref req) =
-                    RequestKind::SyncGroup(SyncGroupRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
+                if let RequestKind::SyncGroup(ref req) = RequestKind::SyncGroup(
+                    SyncGroupRequest::decode(&mut buf, header.request_api_version).unwrap(),
+                ) {
                     handle_sync_group_request(&header, req, &handler_ctx).await
                 } else {
                     log::error!("Failed to decode SyncGroupRequest");
@@ -266,9 +260,9 @@ async fn handle_connection(stream: tokio::net::TcpStream,
             }
             ApiKey::OffsetCommit => {
                 log::debug!("OffsetCommit Request");
-                if let RequestKind::OffsetCommit(ref req) =
-                    RequestKind::OffsetCommit(OffsetCommitRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
+                if let RequestKind::OffsetCommit(ref req) = RequestKind::OffsetCommit(
+                    OffsetCommitRequest::decode(&mut buf, header.request_api_version).unwrap(),
+                ) {
                     handle_offset_commit_request(&header, req, &handler_ctx).await
                 } else {
                     log::error!("Failed to decode OffsetCommitRequest");
@@ -277,9 +271,9 @@ async fn handle_connection(stream: tokio::net::TcpStream,
             }
             ApiKey::InitProducerId => {
                 log::debug!("InitProducerId Request");
-                if let RequestKind::InitProducerId(ref req) =
-                    RequestKind::InitProducerId(InitProducerIdRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
+                if let RequestKind::InitProducerId(ref req) = RequestKind::InitProducerId(
+                    InitProducerIdRequest::decode(&mut buf, header.request_api_version).unwrap(),
+                ) {
                     handle_init_producer_id_request(&header, req, &handler_ctx).await
                 } else {
                     log::error!("Failed to decode InitProducerIdRequest");
@@ -288,31 +282,31 @@ async fn handle_connection(stream: tokio::net::TcpStream,
             }
             ApiKey::OffsetFetch => {
                 log::debug!("OffsetFetch Request");
-                if let RequestKind::OffsetFetch(ref req) =
-                    RequestKind::OffsetFetch(OffsetFetchRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
+                if let RequestKind::OffsetFetch(ref req) = RequestKind::OffsetFetch(
+                    OffsetFetchRequest::decode(&mut buf, header.request_api_version).unwrap(),
+                ) {
                     handle_offset_fetch_request(&header, req, &handler_ctx).await
                 } else {
                     log::error!("Failed to decode OffsetFetchRequest");
                     Err(anyhow::anyhow!("Failed to decode OffsetFetchRequest"))
                 }
-            },
+            }
             ApiKey::Fetch => {
                 log::debug!("Fetch Request");
-                if let RequestKind::Fetch(ref req) =
-                    RequestKind::Fetch(FetchRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
+                if let RequestKind::Fetch(ref req) = RequestKind::Fetch(
+                    FetchRequest::decode(&mut buf, header.request_api_version).unwrap(),
+                ) {
                     handle_fetch_request(&header, req, &handler_ctx).await
                 } else {
                     log::error!("Failed to decode FetchRequest");
                     Err(anyhow::anyhow!("Failed to decode FetchRequest"))
                 }
-            },
+            }
             ApiKey::Produce => {
                 log::debug!("Produce Request");
-                if let RequestKind::Produce(ref req) =
-                    RequestKind::Produce(ProduceRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
+                if let RequestKind::Produce(ref req) = RequestKind::Produce(
+                    ProduceRequest::decode(&mut buf, header.request_api_version).unwrap(),
+                ) {
                     handle_produce_request(&header, req, &handler_ctx).await
                 } else {
                     log::error!("Failed to decode ProduceRequest");
@@ -321,9 +315,9 @@ async fn handle_connection(stream: tokio::net::TcpStream,
             }
             ApiKey::CreateTopics => {
                 log::debug!("CreateTopics Request");
-                if let RequestKind::CreateTopics(ref req) =
-                    RequestKind::CreateTopics(CreateTopicsRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
+                if let RequestKind::CreateTopics(ref req) = RequestKind::CreateTopics(
+                    CreateTopicsRequest::decode(&mut buf, header.request_api_version).unwrap(),
+                ) {
                     handle_create_topics_request(&header, req, &handler_ctx).await
                 } else {
                     log::error!("Failed to decode CreateTopicsRequest");
@@ -333,20 +327,25 @@ async fn handle_connection(stream: tokio::net::TcpStream,
             ApiKey::ConsumerGroupHeartbeat => {
                 log::debug!("ConsumerGroupHeartbeat Request");
                 if let RequestKind::ConsumerGroupHeartbeat(ref req) =
-                    RequestKind::ConsumerGroupHeartbeat(ConsumerGroupHeartbeatRequest::decode(&mut buf, header.request_api_version).unwrap())
+                    RequestKind::ConsumerGroupHeartbeat(
+                        ConsumerGroupHeartbeatRequest::decode(&mut buf, header.request_api_version)
+                            .unwrap(),
+                    )
                 {
                     handle_consumer_group_heartbeat_request(&header, req, &handler_ctx).await
                 } else {
                     log::error!("Failed to decode ConsumerGroupHeartbeatRequest");
-                    Err(anyhow::anyhow!("Failed to decode ConsumerGroupHeartbeatRequest"))
+                    Err(anyhow::anyhow!(
+                        "Failed to decode ConsumerGroupHeartbeatRequest"
+                    ))
                 }
             }
-            ApiKey::Heartbeat =>  {
+            ApiKey::Heartbeat => {
                 log::debug!("Heartbeat Request");
-                if let RequestKind::Heartbeat(ref req) =
-                    RequestKind::Heartbeat(HeartbeatRequest::decode(&mut buf, header.request_api_version).unwrap())
-                {
-                    handle_heartbeat_request(&header,req, &handler_ctx).await
+                if let RequestKind::Heartbeat(ref req) = RequestKind::Heartbeat(
+                    HeartbeatRequest::decode(&mut buf, header.request_api_version).unwrap(),
+                ) {
+                    handle_heartbeat_request(&header, req, &handler_ctx).await
                 } else {
                     log::error!("Failed to decode HeartbeatRequest");
                     Err(anyhow::anyhow!("Failed to decode HeartbeatRequest"))
@@ -367,7 +366,9 @@ async fn handle_connection(stream: tokio::net::TcpStream,
                     let tag = *bytes.get(8).unwrap_or(&0);
                     log::debug!(
                         "TX len_total={}, correlation_id={}, tag=0x{:02X}",
-                        total_len2, cid, tag
+                        total_len2,
+                        cid,
+                        tag
                     );
                 }
 
@@ -376,7 +377,11 @@ async fn handle_connection(stream: tokio::net::TcpStream,
                 log::debug!("Response sent successfully");
             }
             Err(e) => {
-                log::error!("Failed to handle request for api_key {:?}: {:?}", api_key, e);
+                log::error!(
+                    "Failed to handle request for api_key {:?}: {:?}",
+                    api_key,
+                    e
+                );
             }
         }
     }

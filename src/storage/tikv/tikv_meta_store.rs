@@ -1,25 +1,41 @@
-use anyhow::{anyhow, Result};
-use std::{ops::Bound, time::{SystemTime, UNIX_EPOCH}};
-use tikv_client::{Key, KvPair, TransactionClient, Error as TikvError};
+use anyhow::{Result, anyhow};
+use std::{
+    ops::Bound,
+    time::{SystemTime, UNIX_EPOCH},
+};
+use tikv_client::{Error as TikvError, Key, KvPair, TransactionClient};
 
-use crate::traits::meta_store::UnsendMetaStore;
-use crate::common::topic_partition::Topic;
-use crate::common::consumer::ConsumerGroup;
 use crate::common::cluster::Node;
+use crate::common::consumer::ConsumerGroup;
+use crate::common::topic_partition::Topic;
+use crate::traits::meta_store::UnsendMetaStore;
 use std::{future::Future, pin::Pin};
 
 // ========== Keyspace ==========
 const NS: &str = "ms:"; // meta-store namespace
 
-fn k_topic(id: &str) -> String { format!("{NS}topic:data:{}", id) }
-fn k_topic_index_name_prefix(name: &str) -> String { format!("{NS}topic:index:name:{}:", name) }
-fn k_topic_index_name_item(name: &str, id: &str) -> String { format!("{NS}topic:index:name:{}:{}", name, id) }
-fn k_cg(id: &str) -> String { format!("{NS}consumer_group:{}", id) }
-fn k_seq(name: &str) -> String { format!("{NS}seq:{}", name) }
+fn k_topic(id: &str) -> String {
+    format!("{NS}topic:data:{}", id)
+}
+fn k_topic_index_name_prefix(name: &str) -> String {
+    format!("{NS}topic:index:name:{}:", name)
+}
+fn k_topic_index_name_item(name: &str, id: &str) -> String {
+    format!("{NS}topic:index:name:{}:{}", name, id)
+}
+fn k_cg(id: &str) -> String {
+    format!("{NS}consumer_group:{}", id)
+}
+fn k_seq(name: &str) -> String {
+    format!("{NS}seq:{}", name)
+}
 
 fn prefix_end(mut prefix: Vec<u8>) -> Vec<u8> {
     if let Some(last) = prefix.last_mut() {
-        if *last != 0xff { *last += 1; return prefix; }
+        if *last != 0xff {
+            *last += 1;
+            return prefix;
+        }
     }
     Vec::new()
 }
@@ -30,18 +46,17 @@ pub struct TikvMetaStore {
 
 impl TikvMetaStore {
     pub fn new(client: TransactionClient) -> Self {
-        Self {
-            client,
-        }
+        Self { client }
     }
 
     // auto retry with exponential backoff
     async fn with_txn_retry<F, T>(&self, mut f: F) -> Result<T>
     where
         F: for<'a> FnMut(
-            &'a mut tikv_client::Transaction
-        ) -> Pin<Box<dyn Future<Output = anyhow::Result<T>> + Send + 'a>>
-        + Send,
+                &'a mut tikv_client::Transaction,
+            )
+                -> Pin<Box<dyn Future<Output = anyhow::Result<T>> + Send + 'a>>
+            + Send,
     {
         const MAX_RETRY: usize = 10;
         let mut backoff_ms = 20u64;
@@ -58,7 +73,8 @@ impl TikvMetaStore {
                     let _ = txn.rollback().await;
 
                     if let Some(te) = e.downcast_ref::<TikvError>() {
-                        if matches!(te, TikvError::KvError { message } if message.contains("conflict")) {
+                        if matches!(te, TikvError::KvError { message } if message.contains("conflict"))
+                        {
                             last_err = Some(e);
                             tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
                             backoff_ms = (backoff_ms * 2).min(1000);
@@ -87,17 +103,22 @@ impl TikvMetaStore {
         let mut start_bound = Bound::Included(start_key);
 
         loop {
-            let batch: Vec<KvPair> = txn.scan((start_bound.clone(), end_bound.clone()), limit as u32)
+            let batch: Vec<KvPair> = txn
+                .scan((start_bound.clone(), end_bound.clone()), limit as u32)
                 .await?
                 .collect();
 
-            if batch.is_empty() { break; }
+            if batch.is_empty() {
+                break;
+            }
             // next start_bound
             let last_key = batch.last().unwrap().0.clone();
             start_bound = Bound::Excluded(last_key);
 
             out.extend(batch);
-            if out.len() >= limit { break; }
+            if out.len() >= limit {
+                break;
+            }
         }
         txn.commit().await?;
         Ok(out)
@@ -120,10 +141,13 @@ impl UnsendMetaStore for TikvMetaStore {
             let idx_items = idx_items.clone();
             Box::pin(async move {
                 txn.put(key_topic, val).await?;
-                for idx in &idx_items { txn.put(idx.clone(), b"".to_vec()).await?; }
+                for idx in &idx_items {
+                    txn.put(idx.clone(), b"".to_vec()).await?;
+                }
                 Ok(())
             })
-        }).await
+        })
+        .await
     }
 
     async fn get_topic(&self, topic_id: &str) -> Result<Topic> {
@@ -133,11 +157,13 @@ impl UnsendMetaStore for TikvMetaStore {
             Box::pin(async move {
                 let key_for_err = key.clone();
                 let v = txn.get(key).await?;
-                let bytes = v.ok_or_else(|| anyhow!("Topic not found with key: {}", key_for_err))?;
+                let bytes =
+                    v.ok_or_else(|| anyhow!("Topic not found with key: {}", key_for_err))?;
                 let t: Topic = serde_json::from_slice(&bytes)?;
                 Ok(t)
             })
-        }).await
+        })
+        .await
     }
 
     async fn delete_topic_by_id(&self, topic_id: uuid::Uuid) -> Result<()> {
@@ -161,7 +187,8 @@ impl UnsendMetaStore for TikvMetaStore {
                 deleted_prev?;
                 Ok(())
             })
-        }).await
+        })
+        .await
     }
 
     async fn get_topics(&self) -> Result<Vec<Topic>> {
@@ -171,7 +198,9 @@ impl UnsendMetaStore for TikvMetaStore {
         let kvs = self.scan_prefix(&prefix, 20_000).await?;
         let mut out = Vec::new();
         for kv in kvs {
-            if let Ok(t) = serde_json::from_slice::<Topic>(&kv.1) { out.push(t); }
+            if let Ok(t) = serde_json::from_slice::<Topic>(&kv.1) {
+                out.push(t);
+            }
         }
         Ok(out)
     }
@@ -179,14 +208,12 @@ impl UnsendMetaStore for TikvMetaStore {
     async fn get_topic_id_by_topic_name(&self, topic_name: &str) -> Result<Option<String>> {
         let prefix = k_topic_index_name_prefix(topic_name);
         let kvs = self.scan_prefix(&prefix, 16).await?;
-        let id = kvs
-            .get(0)
-            .and_then(|kv| {
-                // key = ...:{name}:{id} → extract id
-                let key_bytes: &[u8] = (&kv.0).into();
-                let key_str = std::str::from_utf8(key_bytes).ok()?;
-                key_str.strip_prefix(&prefix).map(|s| s.to_string())
-            });
+        let id = kvs.get(0).and_then(|kv| {
+            // key = ...:{name}:{id} → extract id
+            let key_bytes: &[u8] = (&kv.0).into();
+            let key_str = std::str::from_utf8(key_bytes).ok()?;
+            key_str.strip_prefix(&prefix).map(|s| s.to_string())
+        });
         Ok(id)
     }
 
@@ -200,14 +227,19 @@ impl UnsendMetaStore for TikvMetaStore {
                 txn.put(key, val).await?;
                 Ok(())
             })
-        }).await
+        })
+        .await
     }
 
     async fn get_consumer_groups(&self) -> Result<Vec<ConsumerGroup>> {
         let prefix = format!("{NS}consumer_group:");
         let kvs = self.scan_prefix(&prefix, 20000).await?;
         let mut out = Vec::new();
-        for kv in kvs { if let Ok(cg) = serde_json::from_slice::<ConsumerGroup>(&kv.1) { out.push(cg); } }
+        for kv in kvs {
+            if let Ok(cg) = serde_json::from_slice::<ConsumerGroup>(&kv.1) {
+                out.push(cg);
+            }
+        }
         Ok(out)
     }
 
@@ -217,10 +249,14 @@ impl UnsendMetaStore for TikvMetaStore {
             let key = key.clone();
             Box::pin(async move {
                 let v = txn.get(key).await?;
-                let ans = match v { Some(bytes) => Some(serde_json::from_slice::<ConsumerGroup>(&bytes)?), None => None };
+                let ans = match v {
+                    Some(bytes) => Some(serde_json::from_slice::<ConsumerGroup>(&bytes)?),
+                    None => None,
+                };
                 Ok(ans)
             })
-        }).await
+        })
+        .await
     }
 
     async fn gen_producer_id(&self) -> Result<i64> {
@@ -232,16 +268,27 @@ impl UnsendMetaStore for TikvMetaStore {
                 Box::pin(async move {
                     // if without exclusive lock, it may conflict with others
                     let cur = txn.get(seq_key.clone()).await?;
-                    let mut v: i64 = match cur { Some(b) => String::from_utf8(b).ok().and_then(|s| s.parse().ok()).unwrap_or(0), None => 0 };
+                    let mut v: i64 = match cur {
+                        Some(b) => String::from_utf8(b)
+                            .ok()
+                            .and_then(|s| s.parse().ok())
+                            .unwrap_or(0),
+                        None => 0,
+                    };
                     v += 1;
                     txn.put(seq_key.clone(), v.to_string().into_bytes()).await?;
                     Ok(v)
                 })
             }
-        }).await
+        })
+        .await
     }
 
-    async fn update_consumer_group<F, Fut>(&self, group_id: &str, update_fn: F) -> Result<Option<ConsumerGroup>>
+    async fn update_consumer_group<F, Fut>(
+        &self,
+        group_id: &str,
+        update_fn: F,
+    ) -> Result<Option<ConsumerGroup>>
     where
         F: FnOnce(ConsumerGroup) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = Result<ConsumerGroup>> + Send + 'static,
@@ -254,7 +301,13 @@ impl UnsendMetaStore for TikvMetaStore {
             // Take update_fn out of the Option
             let update_fn = update_fn.take().expect("update_fn already taken");
             Box::pin(async move {
-                let v = match txn.get(key.clone()).await? { Some(b) => b, None => { txn.commit().await?; return Ok(None); } };
+                let v = match txn.get(key.clone()).await? {
+                    Some(b) => b,
+                    None => {
+                        txn.commit().await?;
+                        return Ok(None);
+                    }
+                };
                 let cg: ConsumerGroup = serde_json::from_slice(&v)?;
 
                 // Warning: short-lived transactions are recommended
@@ -264,18 +317,18 @@ impl UnsendMetaStore for TikvMetaStore {
                 txn.put(key.clone(), updated).await?;
                 Ok(Some(cg))
             })
-        }).await
+        })
+        .await
     }
 
     // Update this node's status and remove stale nodes (heartbeat_time older than 60 seconds)
     async fn update_cluster_status(&self, node_config: &Node) -> Result<()> {
-
         // set heartbeat_time to current time
         let now_ms: i64 = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map_err(|e| anyhow::anyhow!("clock error: {e:?}"))?
             .as_millis() as i64;
-        
+
         let mut node_config = node_config.clone();
         node_config.heartbeat_time = Some(now_ms);
 
@@ -290,7 +343,9 @@ impl UnsendMetaStore for TikvMetaStore {
             .filter_map(|kv| {
                 let k_bytes: &[u8] = (&kv.0).into();
                 let k = String::from_utf8_lossy(k_bytes).to_string();
-                if k == key { return None; } // skip self
+                if k == key {
+                    return None;
+                } // skip self
                 let v = kv.value();
                 let n: Node = match serde_json::from_slice(&v) {
                     Ok(n) => n,
@@ -313,7 +368,8 @@ impl UnsendMetaStore for TikvMetaStore {
                 }
                 Ok(())
             })
-        }).await
+        })
+        .await
     }
 
     async fn get_cluster_status(&self) -> Result<Vec<Node>> {

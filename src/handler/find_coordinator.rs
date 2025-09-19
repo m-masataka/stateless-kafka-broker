@@ -1,21 +1,20 @@
 use crate::common::response::send_kafka_response;
-use kafka_protocol::messages::find_coordinator_request::FindCoordinatorRequest;
-use kafka_protocol::messages::find_coordinator_response::{
-    FindCoordinatorResponse,
-    Coordinator
-};
-use kafka_protocol::messages::RequestHeader;
-use kafka_protocol::messages::BrokerId;
-use anyhow::Result;
 use crate::handler::context::HandlerContext;
+use anyhow::Result;
+use kafka_protocol::messages::BrokerId;
+use kafka_protocol::messages::RequestHeader;
+use kafka_protocol::messages::find_coordinator_request::FindCoordinatorRequest;
+use kafka_protocol::messages::find_coordinator_response::{Coordinator, FindCoordinatorResponse};
 
 pub async fn handle_find_coordinator_request(
     header: &RequestHeader,
     request: &FindCoordinatorRequest,
     handler_ctx: &HandlerContext,
-) -> Result<Vec<u8>>
-{
-    log::info!("Handling FindCoordinatorRequest API VERSION {}", header.request_api_version);
+) -> Result<Vec<u8>> {
+    log::info!(
+        "Handling FindCoordinatorRequest API VERSION {}",
+        header.request_api_version
+    );
     log::info!("FindCoordinatorRequest: {:?}", request);
 
     let node_config = handler_ctx.node_config.clone();

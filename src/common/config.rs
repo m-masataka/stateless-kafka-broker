@@ -1,12 +1,12 @@
-use serde::Deserialize;
+use crate::common::cluster::Node;
+use anyhow::Result;
 use config::{Config, Environment};
+use serde::Deserialize;
 use std::fs::File;
 use std::io::BufReader;
-use anyhow::Result;
-use crate::common::cluster::Node;
 
 #[derive(Debug, Deserialize)]
-#[serde(rename_all = "lowercase")]  // "s3", "file", "redis", "tikv"
+#[serde(rename_all = "lowercase")] // "s3", "file", "redis", "tikv"
 pub enum StorageType {
     File,
     S3,
@@ -52,10 +52,7 @@ pub struct ServerConfig {
 pub fn load_server_config() -> Result<ServerConfig> {
     dotenv::dotenv().ok(); // Load .env file if exists
     let cfg = Config::builder()
-        .add_source(Environment::default()
-            .prefix("KAFKA")
-            .try_parsing(true)
-        )
+        .add_source(Environment::default().prefix("KAFKA").try_parsing(true))
         .build()?;
     let config: ServerConfig = cfg.try_deserialize()?;
     Ok(config)

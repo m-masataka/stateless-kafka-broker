@@ -1,40 +1,33 @@
 use anyhow::Result;
-use kafka_protocol::
-{   
+use kafka_protocol::{
     error::ResponseError,
     messages::{
-        BrokerId,
-        RequestHeader,
-        produce_response::{
-            ProduceResponse,
-            TopicProduceResponse,
-            PartitionProduceResponse,
-            LeaderIdAndEpoch,
-            NodeEndpoint,
-        },
+        BrokerId, RequestHeader,
         produce_request::ProduceRequest,
+        produce_response::{
+            LeaderIdAndEpoch, NodeEndpoint, PartitionProduceResponse, ProduceResponse,
+            TopicProduceResponse,
+        },
     },
-    protocol::StrBytes, 
+    protocol::StrBytes,
 };
 
+use crate::handler::context::HandlerContext;
 use crate::{
     common::{index::index_data, response::send_kafka_response, utils::jittered_delay},
     storage::index_store_impl::IndexStoreImpl,
-    traits::{
-        index_store::IndexStore,
-        log_store::LogStore,
-        meta_store::MetaStore
-    }
+    traits::{index_store::IndexStore, log_store::LogStore, meta_store::MetaStore},
 };
-use crate::handler::context::HandlerContext;
 
 pub async fn handle_produce_request(
     header: &RequestHeader,
     request: &ProduceRequest,
     handler_ctx: &HandlerContext,
-) -> Result<Vec<u8>>
-{
-    log::debug!("Handling ProduceRequest API VERSION {}", header.request_api_version);
+) -> Result<Vec<u8>> {
+    log::debug!(
+        "Handling ProduceRequest API VERSION {}",
+        header.request_api_version
+    );
 
     let meta_store = handler_ctx.meta_store.clone();
     let index_store = handler_ctx.index_store.clone();
@@ -48,19 +41,21 @@ pub async fn handle_produce_request(
         let mut topic_produce_response = TopicProduceResponse::default();
         topic_produce_response.name = topic_data.name.clone();
 
-
         let mut partition_responses = Vec::new();
 
         for request_partition_data in &topic_data.partition_data {
             let mut partition_produce_response = PartitionProduceResponse::default();
             partition_produce_response.index = request_partition_data.index;
 
-            let topic_id = meta_store.get_topic_id_by_topic_name(topic_data.name.as_str()).await?;
+            let topic_id = meta_store
+                .get_topic_id_by_topic_name(topic_data.name.as_str())
+                .await?;
             let topic_id = match topic_id {
                 Some(id) => id,
                 None => {
                     log::error!("Topic not found: {}", topic_data.name.as_str());
-                    partition_produce_response.error_code = ResponseError::UnknownTopicOrPartition.code();
+                    partition_produce_response.error_code =
+                        ResponseError::UnknownTopicOrPartition.code();
                     partition_produce_response.base_offset = 0;
                     partition_produce_response.log_append_time_ms = 0;
                     partition_produce_response.log_start_offset = -1;
@@ -76,28 +71,33 @@ pub async fn handle_produce_request(
                 &topic_id.to_string(),
                 request_partition_data.index,
                 10, // TTL in seconds
-                5, // Wait for 5 seconds before giving up
-            ).await.map_err(|e| {
+                5,  // Wait for 5 seconds before giving up
+            )
+            .await
+            .map_err(|e| {
                 log::error!("Failed to lock index store: {:?}", e);
                 ResponseError::KafkaStorageError
             })?;
 
-            let start_offset = index_store.read_offset(&topic_id.to_string(), request_partition_data.index).await
+            let start_offset = index_store
+                .read_offset(&topic_id.to_string(), request_partition_data.index)
+                .await
                 .map_err(|e| {
                     log::error!("Failed to read offset: {:?}", e);
                     ResponseError::KafkaStorageError
                 })?;
 
-            let start = Instant::now();  // Start timing the write operation for performance measurement
+            let start = Instant::now(); // Start timing the write operation for performance measurement
             match log_store
                 .write_records(
                     &topic_id.to_string(),
                     request_partition_data.index,
                     start_offset,
                     request_partition_data.records.as_ref(),
-                ).await
-            { 
-                Ok((current_offset, key , size)) => {
+                )
+                .await
+            {
+                Ok((current_offset, key, size)) => {
                     let elapsed = start.elapsed();
                     log::debug!(
                         "📝 write_records took {:.2?} ms for topic={}, partition={}, size={:?}",
@@ -114,22 +114,36 @@ pub async fn handle_produce_request(
 
                     // Update the index store with the new base offset and key
                     let data = index_data(&key, size);
-                    index_store.set_index(
-                        &topic_id.to_string(),
-                        request_partition_data.index,
-                        current_offset,
-                        &data,
-                    ).await?;
+                    index_store
+                        .set_index(
+                            &topic_id.to_string(),
+                            request_partition_data.index,
+                            current_offset,
+                            &data,
+                        )
+                        .await?;
 
                     // update the offset in the index store
-                    index_store.write_offset(&topic_id.to_string(), request_partition_data.index, current_offset).await
+                    index_store
+                        .write_offset(
+                            &topic_id.to_string(),
+                            request_partition_data.index,
+                            current_offset,
+                        )
+                        .await
                         .map_err(|e| {
                             log::error!("Failed to set offset in index store: {:?}", e);
                             ResponseError::KafkaStorageError
                         })?;
 
                     // Unlock the index store after writing
-                    index_store.unlock_exclusive(&topic_id.to_string(), request_partition_data.index, &lock_id).await
+                    index_store
+                        .unlock_exclusive(
+                            &topic_id.to_string(),
+                            request_partition_data.index,
+                            &lock_id,
+                        )
+                        .await
                         .map_err(|e| {
                             log::error!("Failed to unlock index store: {:?}", e);
                             ResponseError::KafkaStorageError
@@ -144,7 +158,13 @@ pub async fn handle_produce_request(
                     partition_produce_response.log_append_time_ms = 0;
                     partition_produce_response.log_start_offset = -1;
                     // Unlock the index store even if writing fails
-                    index_store.unlock_exclusive(&topic_id.to_string(), request_partition_data.index, &lock_id).await
+                    index_store
+                        .unlock_exclusive(
+                            &topic_id.to_string(),
+                            request_partition_data.index,
+                            &lock_id,
+                        )
+                        .await
                         .map_err(|e| {
                             log::error!("Failed to unlock index store after error: {:?}", e);
                             ResponseError::KafkaStorageError
@@ -176,7 +196,7 @@ pub async fn handle_produce_request(
     send_kafka_response(header, &response).await
 }
 
-use tokio::time::{sleep, Duration, Instant};
+use tokio::time::{Duration, Instant, sleep};
 
 async fn try_lock_with_retry(
     index_store: &IndexStoreImpl,

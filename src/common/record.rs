@@ -1,15 +1,12 @@
-use serde::{Serialize, Deserialize};
-use base64::{engine::general_purpose, Engine as _};
+use base64::{Engine as _, engine::general_purpose};
+use bincode::config;
+use bincode::{Decode, Encode};
 use bytes::Bytes;
 use indexmap::IndexMap;
-use kafka_protocol::records::TimestampType;
 use kafka_protocol::protocol::StrBytes;
-use bincode::{Decode, Encode};
-use kafka_protocol::records::{
-    RecordBatchDecoder,
-    RecordSet,
-};
-use bincode::config;
+use kafka_protocol::records::TimestampType;
+use kafka_protocol::records::{RecordBatchDecoder, RecordSet};
+use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Decode, Encode)]
 pub struct RecordEntry {
@@ -28,9 +25,7 @@ pub struct RecordEntry {
 }
 
 impl RecordEntry {
-    pub fn convert_to_kafka_record(
-        &self
-    ) -> Option<kafka_protocol::records::Record> {
+    pub fn convert_to_kafka_record(&self) -> Option<kafka_protocol::records::Record> {
         let headers: IndexMap<StrBytes, Option<Bytes>> = IndexMap::new(); // Use Bytes instead of StrBytes
         Some(kafka_protocol::records::Record {
             transactional: self.transactional,
@@ -49,9 +44,7 @@ impl RecordEntry {
     }
 }
 
-pub fn string_to_timestamp_type(
-    timestamp_type: &str,
-) -> Result<TimestampType, String> {
+pub fn string_to_timestamp_type(timestamp_type: &str) -> Result<TimestampType, String> {
     match timestamp_type {
         "Creation" | "CreateTime" => Ok(TimestampType::Creation),
         "LogAppend" | "LogAppendTime" => Ok(TimestampType::LogAppend),
@@ -61,9 +54,9 @@ pub fn string_to_timestamp_type(
 
 pub fn convert_kafka_record_to_record_entry(
     record: &kafka_protocol::records::Record,
-    offset: i64
+    offset: i64,
 ) -> RecordEntry {
-    let headers: Vec<(String, Option<String>)>  = vec![];
+    let headers: Vec<(String, Option<String>)> = vec![];
     RecordEntry {
         transactional: record.transactional,
         control: record.control,
@@ -82,7 +75,7 @@ pub fn convert_kafka_record_to_record_entry(
 
 #[derive(Serialize, Deserialize)]
 pub struct Offset {
-    pub offset: i64
+    pub offset: i64,
 }
 
 pub fn encode_bytes_base64_vec(input: Option<&Bytes>) -> Option<Vec<u8>> {
@@ -92,11 +85,13 @@ pub fn encode_bytes_base64_vec(input: Option<&Bytes>) -> Option<Vec<u8>> {
     })
 }
 
-pub fn decode_bytes_base64_vec(input: Option<&Vec<u8>>) -> Result<Option<Bytes>, base64::DecodeError> {
+pub fn decode_bytes_base64_vec(
+    input: Option<&Vec<u8>>,
+) -> Result<Option<Bytes>, base64::DecodeError> {
     match input {
         Some(data) => {
-            let as_str = std::str::from_utf8(data)
-                .map_err(|_| base64::DecodeError::InvalidByte(0, b'?'))?;
+            let as_str =
+                std::str::from_utf8(data).map_err(|_| base64::DecodeError::InvalidByte(0, b'?'))?;
             let decoded = general_purpose::STANDARD.decode(as_str)?;
             Ok(Some(Bytes::from(decoded)))
         }
@@ -104,18 +99,15 @@ pub fn decode_bytes_base64_vec(input: Option<&Vec<u8>>) -> Result<Option<Bytes>,
     }
 }
 
-
 pub fn bytes_to_output(data: &Bytes, base_offset: i64) -> anyhow::Result<(Vec<u8>, i64)> {
     let mut cursor = std::io::Cursor::new(data);
     let batch: RecordSet = RecordBatchDecoder::decode(&mut cursor)?;
     let mut entries = Vec::with_capacity(batch.records.len());
-    batch.records.iter()
-        .enumerate()
-        .for_each(|(i, r)| {
-            let entry = convert_kafka_record_to_record_entry(r, base_offset as i64 + i as i64 + 1);
-            entries.push(entry);
-        });
-    
+    batch.records.iter().enumerate().for_each(|(i, r)| {
+        let entry = convert_kafka_record_to_record_entry(r, base_offset as i64 + i as i64 + 1);
+        entries.push(entry);
+    });
+
     let config = config::standard();
     let encoded = bincode::encode_to_vec(&entries, config)?;
     let current_offset = base_offset + batch.records.len() as i64;
@@ -132,10 +124,8 @@ pub fn record_bytes_to_kafka_response_bytes(
 
     // Convert RecordEntry to kafka_protocol::records::Record
     let records: Vec<kafka_protocol::records::Record> = decoded_entries
-                    .into_iter()
-                    .filter_map(|record_entry| {
-                        record_entry
-                            .convert_to_kafka_record()
-                    }).collect();
+        .into_iter()
+        .filter_map(|record_entry| record_entry.convert_to_kafka_record())
+        .collect();
     Ok(records)
 }

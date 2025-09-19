@@ -1,11 +1,8 @@
-use kafka_protocol::{messages::RequestHeader, protocol::Encodable};
 use anyhow::Result;
+use kafka_protocol::{messages::RequestHeader, protocol::Encodable};
 
-pub async fn send_kafka_response<T>(
-    header: &RequestHeader,
-    response: &T,
-) -> Result<Vec<u8>>
-where 
+pub async fn send_kafka_response<T>(header: &RequestHeader, response: &T) -> Result<Vec<u8>>
+where
     T: Encodable,
 {
     let is_flexible = is_flexible_version(header.request_api_key, header.request_api_version);
@@ -17,7 +14,7 @@ pub async fn send_kafka_response_insert_prefix<T>(
     response: &T,
     insert_flag: bool,
 ) -> Result<Vec<u8>>
-where 
+where
     T: Encodable,
 {
     let mut response_buf = vec![];
@@ -49,7 +46,7 @@ pub fn is_flexible_version(api_key: i16, version: i16) -> bool {
         13 => version >= 3,  // LeaveGroup
         14 => version >= 4,  // SyncGroup
         15 => version >= 3,  // DescribeGroups
-        18 => version >= 18,  // ApiVersions
+        18 => version >= 18, // ApiVersions
         19 => version >= 5,  // CreateTopics
         20 => version >= 3,  // DeleteTopics
         21 => version >= 1,  // DeleteRecords

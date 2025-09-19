@@ -6,29 +6,29 @@ edition = "2024"
 
 [dependencies]
 kafka-protocol = { version = "0.15.1", default-features = false, features = ["client", "broker", "gzip", "snappy", "messages_enums"] }
-anyhow = "1.0"
+anyhow = "1.0.100"
 bytes = { version = "1.10.1", features = ["serde"] }
 byteorder = "1"
-uuid = { version = "1.8", features = ["serde", "v4"] }
+uuid = { version = "1.18.1", features = ["serde", "v4"] }
 
-log = "0.4"
+log = "0.4.28"
 env_logger = "0.11.8"
 
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-serde_bytes = "0.11" 
+serde = { version = "1.0.225", features = ["derive"] }
+serde_json = "1.0.145"
+serde_bytes = "0.11.19" 
 bincode = "2.0.1"
-config = "0.15.15"
+config = "0.15.16"
 dotenv = "0.15"
 
 base64 = "0.22.1"
 fs2 = "0.4"
-indexmap = "2.11.0"
+indexmap = "2.11.4"
 tokio = { version = "1", features = ["full"] }
-chrono = { version = "0.4", features = ["clock"] }
+chrono = { version = "0.4.42", features = ["clock"] }
 
 aws-config = "1.8.6"
-aws-sdk-s3 = "1.104.0"
+aws-sdk-s3 = "1.106.0"
 
 fred = "10.1.0"
 trait-variant = "0.1"

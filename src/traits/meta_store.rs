@@ -1,8 +1,4 @@
-use crate::common::{
-    topic_partition::Topic,
-    consumer::ConsumerGroup,
-    cluster::Node,
-};
+use crate::common::{cluster::Node, consumer::ConsumerGroup, topic_partition::Topic};
 use anyhow::Result;
 
 #[trait_variant::make(MetaStore: Send)]
@@ -19,7 +15,8 @@ pub trait UnsendMetaStore {
         &self,
         group_id: &str,
         update_fn: F,
-    ) -> Result<Option<ConsumerGroup>>where
+    ) -> Result<Option<ConsumerGroup>>
+    where
         F: FnOnce(ConsumerGroup) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = Result<ConsumerGroup>> + Send + 'static;
     async fn gen_producer_id(&self) -> Result<i64>;

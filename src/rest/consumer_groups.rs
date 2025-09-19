@@ -1,12 +1,13 @@
-use axum::{
-    extract::State,
-    Json,
-};
+use crate::server::rest_server::AppState;
 use crate::traits::meta_store::MetaStore;
-use crate::{server::rest_server::AppState};
+use axum::{Json, extract::State};
 
-pub async fn get_consumer_group(State(st): State<AppState>) -> Json<serde_json::Value>{
-    let consumer_groups = &st.meta_store.get_consumer_groups().await.unwrap_or_default();
+pub async fn get_consumer_group(State(st): State<AppState>) -> Json<serde_json::Value> {
+    let consumer_groups = &st
+        .meta_store
+        .get_consumer_groups()
+        .await
+        .unwrap_or_default();
     log::debug!("Retrieved consumer groups: {:?}", consumer_groups);
 
     Json(serde_json::json!({

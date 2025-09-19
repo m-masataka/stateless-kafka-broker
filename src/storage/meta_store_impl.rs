@@ -1,13 +1,9 @@
-use crate::storage::redis::redis_meta_store::RedisMetaStore;
-use crate::traits::meta_store::{UnsendMetaStore, MetaStore};
+use crate::common::{cluster::Node, consumer::ConsumerGroup, topic_partition::Topic};
 use crate::storage::file::file_meta_store::FileMetaStore;
+use crate::storage::redis::redis_meta_store::RedisMetaStore;
 use crate::storage::s3::s3_meta_store::S3MetaStore;
 use crate::storage::tikv::tikv_meta_store::TikvMetaStore;
-use crate::common::{
-    topic_partition::Topic,
-    consumer::ConsumerGroup,
-    cluster::Node,
-};
+use crate::traits::meta_store::{MetaStore, UnsendMetaStore};
 use anyhow::Result;
 
 pub enum MetaStoreImpl {
@@ -99,7 +95,11 @@ impl MetaStore for MetaStoreImpl {
         }
     }
 
-    async fn update_consumer_group<F, Fut>(&self, group_id: &str, update_fn: F) -> Result<Option<ConsumerGroup>>
+    async fn update_consumer_group<F, Fut>(
+        &self,
+        group_id: &str,
+        update_fn: F,
+    ) -> Result<Option<ConsumerGroup>>
     where
         F: FnOnce(ConsumerGroup) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = Result<ConsumerGroup>> + Send + 'static,

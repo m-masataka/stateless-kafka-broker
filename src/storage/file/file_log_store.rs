@@ -1,15 +1,13 @@
+use crate::common::record::{bytes_to_output, record_bytes_to_kafka_response_bytes};
 use crate::traits::log_store::UnsendLogStore;
+use bytes::Bytes;
+use fs2::FileExt;
+use kafka_protocol::records::RecordBatchEncoder;
 use std::{
-    fs::{create_dir_all, File, OpenOptions},
+    fs::{File, OpenOptions, create_dir_all},
     io::{Error, ErrorKind::InvalidData, Read, Result, Write},
     path::{Path, PathBuf},
 };
-use bytes::Bytes;
-use kafka_protocol::records::{
-    RecordBatchEncoder,
-};
-use fs2::FileExt;
-use crate::common::record::{bytes_to_output, record_bytes_to_kafka_response_bytes};
 
 pub struct FileLogStore {
     log_store_dir: PathBuf,
@@ -26,21 +24,33 @@ impl FileLogStore {
 }
 
 impl UnsendLogStore for FileLogStore {
-    async fn write_records(&self, topic_id: &str, partition: i32, start_offset: i64,  records: Option<&Bytes>) -> anyhow::Result<(i64, String, u64)> {
+    async fn write_records(
+        &self,
+        topic_id: &str,
+        partition: i32,
+        start_offset: i64,
+        records: Option<&Bytes>,
+    ) -> anyhow::Result<(i64, String, u64)> {
         // Check if the log store directory exists, if not create it
         if let Some(data) = records {
             let object_key = self.log_key(topic_id, partition, start_offset);
-            
+
             let (output, current_offset) = bytes_to_output(data, start_offset)?;
-            
-            self.put_object(&object_key, &output)
-                .map_err(|e| {
-                    log::error!("Failed to put object to Dir: {:?}", e);
-                    e
-                })?;
-            
-            log::debug!("Successfully wrote batch to file for topic: {}, partition: {}", topic_id, partition);
-            let object_key_str = object_key.to_str().unwrap_or("Invalid UTF-8 path").to_string();
+
+            self.put_object(&object_key, &output).map_err(|e| {
+                log::error!("Failed to put object to Dir: {:?}", e);
+                e
+            })?;
+
+            log::debug!(
+                "Successfully wrote batch to file for topic: {}, partition: {}",
+                topic_id,
+                partition
+            );
+            let object_key_str = object_key
+                .to_str()
+                .unwrap_or("Invalid UTF-8 path")
+                .to_string();
             Ok((current_offset, object_key_str, output.len() as u64))
         } else {
             Err(anyhow::anyhow!("No records to write"))
@@ -59,7 +69,10 @@ impl UnsendLogStore for FileLogStore {
                 Ok(data) => data,
                 Err(e) => {
                     // If the object does not exist, we initialize it with an empty log
-                    log::warn!("Log object not found. Initializing with empty log. Error: {:?}", e);
+                    log::warn!(
+                        "Log object not found. Initializing with empty log. Error: {:?}",
+                        e
+                    );
                     let init_log = Vec::new();
                     Bytes::from(init_log)
                 }
@@ -71,7 +84,7 @@ impl UnsendLogStore for FileLogStore {
             response.extend_from_slice(&records);
         }
         // Encode the records back to Bytes
-        let encode_options = kafka_protocol::records::RecordEncodeOptions{
+        let encode_options = kafka_protocol::records::RecordEncodeOptions {
             version: 2,
             compression: kafka_protocol::records::Compression::None,
         };
@@ -85,14 +98,17 @@ impl UnsendLogStore for FileLogStore {
 
 impl FileLogStore {
     fn log_key(&self, topic_id: &str, partition: i32, offset: i64) -> PathBuf {
-        self.log_store_dir.join(format!("{}/{}/{}{}.log", topic_id, partition, self.log_file_name_prefix, offset))
+        self.log_store_dir.join(format!(
+            "{}/{}/{}{}.log",
+            topic_id, partition, self.log_file_name_prefix, offset
+        ))
     }
 
     fn put_object(&self, path: &Path, data: &[u8]) -> Result<()> {
         if !path.exists() {
-            let parent_dir =  path.parent().ok_or_else(|| {
-                Error::new(InvalidData, "Path has no parent directory")
-            })?;
+            let parent_dir = path
+                .parent()
+                .ok_or_else(|| Error::new(InvalidData, "Path has no parent directory"))?;
             let _ = create_dir_all(parent_dir);
         }
         let mut file = OpenOptions::new()

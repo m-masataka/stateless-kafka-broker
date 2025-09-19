@@ -1,35 +1,29 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use anyhow::Result;
-use kafka_protocol::messages::RequestHeader;
-use kafka_protocol::protocol::StrBytes;
-use kafka_protocol::messages::metadata_response::{
-    MetadataResponse, MetadataResponseBroker, MetadataResponseTopic, MetadataResponsePartition
-};
-use kafka_protocol::messages::metadata_request::{
-    MetadataRequest,
-};
-use kafka_protocol::messages::TopicName;
-use kafka_protocol::messages::BrokerId;
 use kafka_protocol::error::ResponseError::UnknownTopicOrPartition;
-
-use crate::{
-    common::{
-        response::send_kafka_response,
-        topic_partition::Topic,
-        cluster::Node,
-    }
+use kafka_protocol::messages::BrokerId;
+use kafka_protocol::messages::RequestHeader;
+use kafka_protocol::messages::TopicName;
+use kafka_protocol::messages::metadata_request::MetadataRequest;
+use kafka_protocol::messages::metadata_response::{
+    MetadataResponse, MetadataResponseBroker, MetadataResponsePartition, MetadataResponseTopic,
 };
-use crate::traits::meta_store::MetaStore;
+use kafka_protocol::protocol::StrBytes;
+
+use crate::common::{cluster::Node, response::send_kafka_response, topic_partition::Topic};
 use crate::handler::context::HandlerContext;
+use crate::traits::meta_store::MetaStore;
 
 pub async fn handle_metadata_request(
     header: &RequestHeader,
     request: &MetadataRequest,
     handler_ctx: &HandlerContext,
-) -> Result<Vec<u8>>
-{
-    log::info!("Handling MetadataRequest API VERSION {}", header.request_api_version);
+) -> Result<Vec<u8>> {
+    log::info!(
+        "Handling MetadataRequest API VERSION {}",
+        header.request_api_version
+    );
     log::debug!("MetadataRequest: {:?}", request);
 
     let meta_store = handler_ctx.meta_store.clone();
@@ -42,13 +36,16 @@ pub async fn handle_metadata_request(
             vec![]
         }
     };
-    let response_brokers = brokers.iter().map(|b| {
-        let mut broker = MetadataResponseBroker::default();
-        broker.node_id = BrokerId(b.node_id);
-        broker.host = b.host.clone().into();
-        broker.port = b.port;
-        broker
-    }).collect::<Vec<_>>();
+    let response_brokers = brokers
+        .iter()
+        .map(|b| {
+            let mut broker = MetadataResponseBroker::default();
+            broker.node_id = BrokerId(b.node_id);
+            broker.host = b.host.clone().into();
+            broker.port = b.port;
+            broker
+        })
+        .collect::<Vec<_>>();
     response.brokers = response_brokers;
     response.cluster_id = Some(node_config.cluster_id.clone().into());
     response.controller_id = BrokerId(node_config.controller_id);
@@ -59,20 +56,24 @@ pub async fn handle_metadata_request(
     response.topics = match &request.topics {
         None => {
             // get all topics
-            meta_store.get_topics().await
-                .unwrap_or_default()
-                .into_iter()
-                .map(|topic| to_metadata_response_topic(&topic,  brokers.clone()))
-                .collect::<Vec<_>>()
-        },
-        Some(topics) if topics.is_empty() => {
-            // get all topics
-            meta_store.get_topics().await
+            meta_store
+                .get_topics()
+                .await
                 .unwrap_or_default()
                 .into_iter()
                 .map(|topic| to_metadata_response_topic(&topic, brokers.clone()))
                 .collect::<Vec<_>>()
-        },
+        }
+        Some(topics) if topics.is_empty() => {
+            // get all topics
+            meta_store
+                .get_topics()
+                .await
+                .unwrap_or_default()
+                .into_iter()
+                .map(|topic| to_metadata_response_topic(&topic, brokers.clone()))
+                .collect::<Vec<_>>()
+        }
         Some(topics) => {
             // Received specific topics
             let mut response_topics = Vec::new();
@@ -83,7 +84,8 @@ pub async fn handle_metadata_request(
                     if let Some(id) = topic_id {
                         match meta_store.get_topic(&id).await {
                             Ok(topic_info) => {
-                                response_topics.push(to_metadata_response_topic(&topic_info, brokers.clone()));
+                                response_topics
+                                    .push(to_metadata_response_topic(&topic_info, brokers.clone()));
                             }
                             Err(e) => {
                                 log::error!("Failed to get topic {}: {}", name.as_str(), e);
@@ -99,7 +101,7 @@ pub async fn handle_metadata_request(
                         let mut topic_response = MetadataResponseTopic::default();
                         topic_response.name = Some(name.clone());
                         topic_response.error_code = UnknownTopicOrPartition.code();
-                        response_topics.push(topic_response); 
+                        response_topics.push(topic_response);
                     }
                 } else {
                     log::debug!("If request_topic.name is None, it should not happen in practice.");
@@ -116,7 +118,10 @@ pub async fn handle_metadata_request(
 
 pub fn to_metadata_response_topic(topic: &Topic, brokers: Vec<Node>) -> MetadataResponseTopic {
     let mut topic_response = MetadataResponseTopic::default();
-    topic_response.name = topic.name.clone().map(|s| TopicName::from(StrBytes::from(s)));
+    topic_response.name = topic
+        .name
+        .clone()
+        .map(|s| TopicName::from(StrBytes::from(s)));
     topic_response.is_internal = topic.is_internal;
     topic_response.topic_id = topic.topic_id;
     topic_response.error_code = 0;
@@ -132,7 +137,8 @@ pub fn to_metadata_response_topic(topic: &Topic, brokers: Vec<Node>) -> Metadata
             let mut partition_response = MetadataResponsePartition::default();
             partition_response.partition_index = i;
             partition_response.leader_id = BrokerId(leader_id);
-            partition_response.replica_nodes = brokers.iter().map(|b| BrokerId(b.node_id)).collect();
+            partition_response.replica_nodes =
+                brokers.iter().map(|b| BrokerId(b.node_id)).collect();
             partition_response.isr_nodes = brokers.iter().map(|b| BrokerId(b.node_id)).collect();
             partition_response.leader_epoch = 0;
             partition_response.error_code = 0;

@@ -1,23 +1,12 @@
+use crate::common::{cluster::Node, consumer::ConsumerGroup, topic_partition::Topic};
 use crate::traits::meta_store::UnsendMetaStore;
-use crate::common::{
-    topic_partition::Topic,
-    consumer::ConsumerGroup,
-    cluster::Node,
-};
 use anyhow::Result;
-use std::io::{ 
-    BufReader,
-    ErrorKind::NotFound,
-    Read,
-    Write,
-    Seek,
-    SeekFrom,
-};
-use std::fs::{File, create_dir_all, OpenOptions};
+use fs2::FileExt;
 use std::collections::HashMap;
+use std::fs::{File, OpenOptions, create_dir_all};
+use std::io::{BufReader, ErrorKind::NotFound, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 use std::path::PathBuf;
-use fs2::FileExt;
 
 pub struct FileMetaStore {
     meta_store_path: PathBuf,
@@ -46,20 +35,20 @@ impl UnsendMetaStore for FileMetaStore {
                 } else {
                     serde_json::from_str(&contents)?
                 }
-            },
+            }
             Err(e) if e.kind() == NotFound => {
                 // If the file does not exist, create a new one
                 HashMap::new()
-            },
+            }
             Err(e) => return Err(e.into()), // Other errors are returned as is
         };
-    
+
         metadata_map.insert(data.topic_id.to_string(), data.clone());
-    
+
         let mut file = File::create(&self.meta_store_path)?;
         let json = serde_json::to_string_pretty(&metadata_map)?;
         file.write_all(json.as_bytes())?;
-    
+
         Ok(())
     }
 
@@ -71,20 +60,24 @@ impl UnsendMetaStore for FileMetaStore {
         let reader = BufReader::new(file);
         let map: HashMap<String, Topic> = serde_json::from_reader(reader)?;
 
-        let result = map.values().find(|topic| topic.topic_id.to_string() == topic_id);
-        Ok(result.cloned().ok_or_else(|| anyhow::anyhow!("Topic not found"))?)
+        let result = map
+            .values()
+            .find(|topic| topic.topic_id.to_string() == topic_id);
+        Ok(result
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("Topic not found"))?)
     }
-    
+
     async fn get_topics(&self) -> Result<Vec<Topic>> {
         let file = match File::open(&self.meta_store_path) {
             Ok(f) => f,
             Err(e) if e.kind() == NotFound => return Ok(vec![]),
             Err(e) => return Err(e.into()),
         };
-    
+
         let reader = BufReader::new(file);
         let map: HashMap<String, Topic> = serde_json::from_reader(reader)?;
-    
+
         Ok(map.values().cloned().collect())
     }
 
@@ -94,16 +87,16 @@ impl UnsendMetaStore for FileMetaStore {
             Err(e) if e.kind() == NotFound => return Ok(None),
             Err(e) => return Err(e.into()),
         };
-    
+
         let reader = BufReader::new(file);
         let map: HashMap<String, Topic> = serde_json::from_reader(reader)?;
-    
+
         for (id, topic) in map.iter() {
             if topic.name.as_deref() == Some(topic_name) {
                 return Ok(Some(id.clone()));
             }
         }
-    
+
         Ok(None)
     }
 
@@ -117,45 +110,43 @@ impl UnsendMetaStore for FileMetaStore {
                 } else {
                     serde_json::from_str(&contents)?
                 }
-            },
-            Err(e) if e.kind() == NotFound => {
-                HashMap::new()
-            },
+            }
+            Err(e) if e.kind() == NotFound => HashMap::new(),
             Err(e) => return Err(e.into()),
         };
-    
+
         metadata_map.retain(|_, topic| topic.topic_id != topic_id);
-    
+
         let mut file = File::create(&self.meta_store_path)?;
         let json = serde_json::to_string_pretty(&metadata_map)?;
         file.write_all(json.as_bytes())?;
-    
+
         Ok(())
     }
 
     async fn save_consumer_group(&self, data: &ConsumerGroup) -> Result<()> {
         let filename = format!("{0}.json", data.group_id);
         let path = &self.consumer_group_dir_path.join(filename);
-    
+
         log::debug!("Upserting consumer group data to file: {:?}", path);
-    
+
         create_dir_all(&self.consumer_group_dir_path)?;
 
         let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open(&path)?;
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&path)?;
 
         log::debug!("Saving updated consumer group data to file: {:?}", path);
         let json = serde_json::to_string_pretty(&data)?;
         file.set_len(0)?;
-        file.seek(std::io::SeekFrom::Start(0))?; 
+        file.seek(std::io::SeekFrom::Start(0))?;
         file.write_all(json.as_bytes())?;
         Ok(())
     }
 
-    async fn get_consumer_groups(&self) -> Result<Vec<ConsumerGroup> > {
+    async fn get_consumer_groups(&self) -> Result<Vec<ConsumerGroup>> {
         let mut consumer_groups = Vec::new();
         if !self.consumer_group_dir_path.exists() {
             return Ok(consumer_groups);
@@ -195,40 +186,48 @@ impl UnsendMetaStore for FileMetaStore {
                 log::error!("Failed to read consumer group data: {}", e);
                 Err(e.into())
             }
-
         }
     }
 
-    async fn update_consumer_group<F,Fut>(&self,group_id: &str,update_fn:F,) -> Result<Option<ConsumerGroup> >where F:FnOnce(ConsumerGroup) -> Fut+Send+'static,Fut:std::future::Future<Output = Result<ConsumerGroup> > +Send+'static {
+    async fn update_consumer_group<F, Fut>(
+        &self,
+        group_id: &str,
+        update_fn: F,
+    ) -> Result<Option<ConsumerGroup>>
+    where
+        F: FnOnce(ConsumerGroup) -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = Result<ConsumerGroup>> + Send + 'static,
+    {
         let filename = format!("{group_id}.json");
         let path = &self.consumer_group_dir_path.join(filename);
 
         log::debug!("Updating consumer group with closure: {}", group_id);
         let mut file = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .create(true)
-        .open(&path)?;
-        
+            .read(true)
+            .write(true)
+            .create(true)
+            .open(&path)?;
+
         file.lock_exclusive()?;
         file.seek(SeekFrom::Start(0))?;
         let reader = BufReader::new(&mut file);
-    
-        let consumer_group: ConsumerGroup = match serde_json::from_reader::<_, ConsumerGroup>(reader) {
-            Ok(g) => g,
-            Err(e) if e.is_eof() => {
-                log::warn!("File is empty: {:?}", path);
-                return Ok(None);
-            }
-            Err(e) => return Err(e.into()),
-        };
+
+        let consumer_group: ConsumerGroup =
+            match serde_json::from_reader::<_, ConsumerGroup>(reader) {
+                Ok(g) => g,
+                Err(e) if e.is_eof() => {
+                    log::warn!("File is empty: {:?}", path);
+                    return Ok(None);
+                }
+                Err(e) => return Err(e.into()),
+            };
 
         let updated_group = update_fn(consumer_group).await?;
 
         log::debug!("Saving updated consumer group data to file: {:?}", path);
         let json = serde_json::to_string_pretty(&updated_group)?;
         file.set_len(0)?;
-        file.seek(std::io::SeekFrom::Start(0))?; 
+        file.seek(std::io::SeekFrom::Start(0))?;
         file.write_all(json.as_bytes())?;
         Ok(Some(updated_group))
     }
@@ -240,7 +239,7 @@ impl UnsendMetaStore for FileMetaStore {
             .write(true)
             .create(true)
             .open(&path)?;
-        
+
         file.lock_exclusive()?;
         file.seek(SeekFrom::Start(0))?;
 
@@ -268,7 +267,7 @@ impl UnsendMetaStore for FileMetaStore {
         Ok(())
     }
 
-    async fn get_cluster_status(&self) -> Result<Vec<Node> > {
+    async fn get_cluster_status(&self) -> Result<Vec<Node>> {
         Ok(vec![])
     }
 }
