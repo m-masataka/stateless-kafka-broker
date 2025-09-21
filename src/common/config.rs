@@ -38,10 +38,12 @@ pub struct ServerConfig {
     pub meta_store_s3_secret_key: Option<String>,
     pub meta_store_s3_region: Option<String>,
     pub meta_store_redis_urls: Option<String>, // "redis://redis-1:7001,redis://redis-2:7002"
+    pub meta_store_redis_pool_size: Option<usize>,
     pub meta_store_tikv_endpoints: Option<String>, // "tikv-1:2379,tikv-2:2379"
 
     pub index_store_type: StorageType, // "file", "s3", "redis"
     pub index_store_redis_urls: Option<String>, // "redis://redis-1:7001,redis://redis-2:7002"
+    pub index_store_redis_pool_size: Option<usize>,
     pub index_store_tikv_endpoints: Option<String>, // "tikv-1:2379,tikv-2:2379"
 
     pub tcp_send_buffer_bytes: Option<usize>,
