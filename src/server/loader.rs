@@ -91,7 +91,7 @@ pub async fn load_index_store(server_config: &ServerConfig) -> Result<IndexStore
 
             let config =
                 Config::from_url(&*redis_uri(redis_urls)).expect("Failed to create Redis config");
-            let pool_size = 100;
+            let pool_size = server_config.meta_store_redis_pool_size.unwrap_or(10);
             let redis_client = Builder::from_config(config)
                 .with_connection_config(|c| {
                     c.connection_timeout = Duration::from_secs(10);
@@ -168,7 +168,7 @@ pub async fn load_meta_store(server_config: &ServerConfig) -> Result<MetaStoreIm
                 .collect::<Vec<String>>();
             let config =
                 Config::from_url(&*redis_uri(redis_urls)).expect("Failed to create Redis config");
-            let pool_size = 100;
+            let pool_size = server_config.meta_store_redis_pool_size.unwrap_or(10);
             let redis_client = Builder::from_config(config)
                 .with_connection_config(|c| {
                     c.connection_timeout = Duration::from_secs(10);
