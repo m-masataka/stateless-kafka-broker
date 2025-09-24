@@ -63,7 +63,7 @@ pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
     let index_store = Arc::new(load_index_store(&server_config_load).await.unwrap());
 
     // Start cluster heartbeat task
-    log::info!("A: before spawning heartbeat");
+    log::info!("Starting cluster heartbeat task...");
     {
         let meta_store = meta_store.clone();
         let node_config = node_conf_load.clone();
@@ -83,7 +83,6 @@ pub async fn server_start(config_path: &str) -> anyhow::Result<()> {
             }
         });
     }
-    log::info!("B: after spawning heartbeat, entering accept loop");
 
     loop {
         let (stream, addr) = listener.accept().await?;
