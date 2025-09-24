@@ -248,7 +248,9 @@ impl UnsendMetaStore for RedisMetaStore {
     }
 
     async fn update_cluster_status(&self, node_config: &Node) -> Result<()> {
-        let key = format!("node_config:{}", node_config.node_id);
+        let tag = "sbroker";
+        let key = format!("node_config:{{{}}}:{}", tag, node_config.node_id);
+        let idx = format!("cluster:{{{}}}:nodes", tag);
         let key_self = key.clone();
         let mut node_config = node_config.clone();
         let now_ms: i64 = std::time::SystemTime::now()
@@ -270,27 +272,31 @@ impl UnsendMetaStore for RedisMetaStore {
                 return Err(anyhow::anyhow!("Failed to set node config in Redis"));
             }
         }
+        self.client.sadd::<usize, _, _>(&idx, [node_config.node_id.clone()]).await
+            .map_err(|e| anyhow::anyhow!("Failed to add node to index set: {}", e))?;
+
         log::debug!("Updated cluster status for node: {}", key_self);
         Ok(())
     }
 
     async fn get_cluster_status(&self) -> Result<Vec<Node>> {
-        let prefix = "node_config:";
-        let max_nodes = 1000;
-        let keys: Vec<Key> = self.scan_keys(&format!("{}*", prefix), max_nodes).await?;
+        let tag = "sbroker";
+        let idx = format!("cluster:{{{}}}:nodes", tag);
+        let ids: Vec<String> = self.client.smembers(&idx).await?;
+        let keys: Vec<String> = ids
+            .iter()
+            .map(|id| format!("node_config:{{{}}}:{}", tag, id))
+            .collect();
+        let keys_for_log = keys.clone();
+        let vals: Vec<Option<String>> = self.client.mget(keys).await?;
         let mut nodes = Vec::new();
-        for key in keys {
-            let key_clone = key.clone();
-            let maybe_value: Option<String> = self.client.get(key).await?;
-            let value = match maybe_value {
-                Some(v) => v,
+        for (i, v) in vals.into_iter().enumerate() {
+            match v {
+                Some(j) => if let Ok(n) = serde_json::from_str::<Node>(&j) { nodes.push(n) },
                 None => {
-                    log::warn!("Node config not found for key: {:?}", key_clone);
-                    continue;
+                    let _ : usize = self.client.srem(&idx, [ids[i].clone()]).await.unwrap_or(0);
+                    log::warn!("Node config not found for key: {}", keys_for_log[i]);
                 }
-            };
-            if let Ok(node) = serde_json::from_str::<Node>(&value) {
-                nodes.push(node);
             }
         }
         Ok(nodes)
