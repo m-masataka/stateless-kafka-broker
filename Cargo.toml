@@ -25,6 +25,7 @@ base64 = "0.22.1"
 fs2 = "0.4"
 indexmap = "2.11.4"
 tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
 chrono = { version = "0.4.42", features = ["clock"] }
 
 aws-config = "1.8.6"
