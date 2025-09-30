@@ -25,7 +25,7 @@ where
     }
 
     let mut full_response = vec![];
-    // full_response.extend_from_slice(&(response_buf.len() as u32 + 4).to_be_bytes()); // this bytes is added by length-delimited codec
+    full_response.extend_from_slice(&(response_buf.len() as u32 + 4).to_be_bytes());
     full_response.extend_from_slice(&header.correlation_id.to_be_bytes());
     full_response.extend_from_slice(&response_buf);
     log::debug!("Full Kafka response length: {}", full_response.len());
@@ -72,7 +72,7 @@ pub fn is_flexible_version(api_key: i16, version: i16) -> bool {
         41 => version >= 1,  // DeleteGroups
         42 => version >= 1,  // ElectLeaders
         43 => version >= 0,  // IncrementalAlterConfigs
-        // ... other API keys
+        // ... 必要に応じて追加
         _ => false,
     }
 }
