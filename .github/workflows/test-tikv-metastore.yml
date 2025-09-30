@@ -84,37 +84,25 @@ jobs:
 
     - name: Checkout
       uses: actions/checkout@v4
-    - uses: dtolnay/rust-toolchain@stable
-    - uses: Swatinem/rust-cache@v2
+      
+    - name: Install Rust (rustup)
+      run: |
+        curl https://sh.rustup.rs -sSf | sh -s -- -y --no-modify-path
+        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+    - name: Cache cargo registry
+      uses: actions/cache@v4
       with:
-        cache-on-failure: true
-        paths: |
+        path: |
           ~/.cargo/bin/
           ~/.cargo/registry/index/
           ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
           target/
-    - name: Install faster linker (lld)
-      run: sudo apt-get install -y lld clang
-
-    - uses: mozilla-actions/sccache-action@v0.0.5
-    - name: Configure cargo (linker + sccache + sparse index)
-      run: |
-        mkdir -p .cargo
-        cat > .cargo/config.toml <<'EOF'
-        [registries.crates-io]
-        protocol = "sparse"
-
-        [target.x86_64-unknown-linux-gnu]
-        linker = "clang"
-        rustflags = ["-Clink-arg=-fuse-ld=lld"]
-
-        [build]
-        rustc-wrapper = "sccache"
-        EOF
-        echo "SCCACHE_CACHE_SIZE=2G" >> $GITHUB_ENV
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Build broker
-      run: cargo build --release -p stateless_kafka_broker
+      run: cargo build --release
 
     - name: Confirm broker binary exists
       run: |
@@ -154,7 +142,7 @@ jobs:
         exit 1
 
     - name: Run tests
-      run: cargo test --release --test kafka_client
+      run: cargo test --test kafka_client
       
     - name: Show rust-server.log if test fails
       if: failure()
