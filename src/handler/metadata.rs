@@ -1,7 +1,7 @@
 use std::hash::{DefaultHasher, Hash, Hasher};
 
 use anyhow::Result;
-use kafka_protocol::error::ResponseError::UnknownTopicOrPartition;
+use kafka_protocol::error::ResponseError::{UnknownServerError, UnknownTopicOrPartition};
 use kafka_protocol::messages::BrokerId;
 use kafka_protocol::messages::RequestHeader;
 use kafka_protocol::messages::TopicName;
@@ -29,13 +29,17 @@ pub async fn handle_metadata_request(
     let meta_store = handler_ctx.meta_store.clone();
     let node_config = handler_ctx.node_config.clone();
     let mut response = MetadataResponse::default();
-    let brokers = match meta_store.get_cluster_status().await {
+    let mut brokers = match meta_store.get_cluster_status().await {
         Ok(brokers) => brokers,
         Err(e) => {
             log::error!("Failed to get cluster status: {}", e);
             vec![]
         }
     };
+    if brokers.is_empty() {
+        log::warn!("Cluster status returned no brokers; using local node config as fallback");
+        brokers.push((**node_config).clone());
+    }
     let response_brokers = brokers
         .iter()
         .map(|b| {
@@ -127,6 +131,12 @@ pub fn to_metadata_response_topic(topic: &Topic, brokers: Vec<Node>) -> Metadata
     topic_response.error_code = 0;
 
     let n = brokers.len();
+    if n == 0 {
+        log::warn!("Unable to assign metadata partitions because broker list is empty");
+        topic_response.error_code = UnknownServerError.code();
+        topic_response.partitions = Vec::new();
+        return topic_response;
+    }
     let start = topic_hash_seed(topic, n);
 
     topic_response.partitions = (0..topic.num_partitions)
@@ -150,6 +160,10 @@ pub fn to_metadata_response_topic(topic: &Topic, brokers: Vec<Node>) -> Metadata
 }
 
 fn topic_hash_seed(topic: &Topic, n: usize) -> usize {
+    debug_assert!(
+        n > 0,
+        "broker list must not be empty when computing topic hash seed"
+    );
     let mut h = DefaultHasher::new();
     // use topic name if available, otherwise use topic_id
     if let Some(ref name) = topic.name {
