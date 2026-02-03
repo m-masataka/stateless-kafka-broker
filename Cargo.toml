@@ -7,7 +7,7 @@ edition = "2024"
 [dependencies]
 kafka-protocol = { version = "0.15.1", default-features = false, features = ["client", "broker", "gzip", "snappy", "messages_enums"] }
 anyhow = "1.0.100"
-bytes = { version = "1.10.1", features = ["serde"] }
+bytes = { version = "1.11.1", features = ["serde"] }
 byteorder = "1"
 uuid = { version = "1.18.1", features = ["serde", "v4"] }
 
